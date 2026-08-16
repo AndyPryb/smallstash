@@ -1,0 +1,26 @@
+Thumbs.db
+.DS_Store
+.gradle
+build/
+target/
+out/
+.micronaut/
+.idea
+*.iml
+*.ipr
+*.iws
+.project
+.settings
+.classpath
+.factorypath
+
+# Personal/local tool config - not shared project state
+.claude/settings.local.json
+
+# Never commit real secrets/credentials
+.env
+.env.*
+*.pem
+*.key
+**/application-local.properties
+**/application-secrets.properties
