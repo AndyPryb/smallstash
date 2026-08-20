@@ -25,16 +25,11 @@ one-line pointer.
    (`micronaut.security.enabled=false`) until a real Cognito pool exists,
    see application.properties / application-lambda.properties.
 
-## Still open, doesn't block current backend work
-
-4. **Infra-as-code tool** — Terraform, CDK, SAM, or manual console?
-   Recommended: **AWS CDK (Java)** — keeps one language across app and
-   infra for a solo maintainer. Terraform acceptable alternative if
-   multi-cloud portability matters to you. Not needed yet: local backend
-   work runs against LocalStack (`mvn test`) regardless of which tool
-   eventually provisions the real AWS resources.
-   **Status: recommended default given, awaiting confirmation — needed
-   before the first real deploy, not before local dev.**
+4. **Infra-as-code tool.**
+   **Status: Resolved — AWS CDK (Java)**, confirmed. New decisions made
+   alongside it (SRP-only app client, MFA, dedicated deploy IAM user, CDK
+   auto-wiring the Lambda security env vars) are tracked in
+   [todo.md](todo.md) until the `infra/` CDK module actually lands.
 
 ## Lower urgency (don't block backend/storage work, decide when we get there)
 
