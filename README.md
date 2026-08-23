@@ -16,7 +16,7 @@ state.
   cold (human or AI).
 - [docs/architecture.md](docs/architecture.md) — full system design, data
   model, cost model, roadmap.
-- [docs/decisions/](docs/decisions/) — ADRs explaining *why*, not just what.
+- [docs/decisions/0001-storage-s3-vs-dynamodb.md](docs/decisions/0001-storage-s3-vs-dynamodb.md) — ADRs explaining *why*, not just what.
 
 ## Repo layout
 
