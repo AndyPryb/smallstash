@@ -2,6 +2,7 @@
   import { saveVault } from '../session.js';
   import ChangeMasterPasswordForm from './ChangeMasterPasswordForm.svelte';
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
+  import EntryListItem from './EntryListItem.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
@@ -65,11 +66,7 @@
 
   <ul class="entries">
     {#each vaultDocument.entries as entry, i (i)}
-      <li>
-        <strong>{entry.title || '(untitled)'}</strong>
-        <span>{entry.username}</span>
-        <button onclick={() => removeEntry(i)} aria-label="Delete entry">✕</button>
-      </li>
+      <EntryListItem {entry} onremove={() => removeEntry(i)} />
     {:else}
       <li class="empty">No entries yet.</li>
     {/each}
@@ -116,9 +113,6 @@
   .entries li.empty {
     color: #888;
     border-bottom: none;
-  }
-  .entries button {
-    margin-left: auto;
   }
   form {
     display: flex;
