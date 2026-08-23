@@ -1,0 +1,25 @@
+{
+  "name": "smallstash-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "smallStash PWA client - all vault crypto happens here, in the browser, and nowhere else. See docs/architecture.md §3.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test --test-isolation=none src/lib/**/*.test.js"
+  },
+  "dependencies": {
+    "amazon-cognito-identity-js": "^6.3.20",
+    "hash-wasm": "^4.12.0",
+    "idb": "^8.0.3"
+  },
+  "devDependencies": {
+    "@noble/hashes": "^2.3.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "svelte": "^5.56.10",
+    "vite": "^8.2.2",
+    "vite-plugin-pwa": "^1.3.0"
+  }
+}
