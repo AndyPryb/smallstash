@@ -79,10 +79,10 @@ one-line pointer.
    as frozen the moment any real vault relies on it. See that file's header
    comment.
 
-6. **Password generator scope** — in v1 alongside the vault, or later?
-   Leaning: include in v1 — it's client-side-only, low effort, and users
-   expect it from a password manager. **Not yet built** — `web/`'s scaffold
-   (2026-08-23) covers login/vault CRUD only.
+6. **Password generator scope.** **Status: Resolved — included in v1**, as
+   leaned. `web/src/lib/generator.js` +
+   `web/src/lib/components/PasswordGeneratorPanel.svelte` (2026-08-23) — see
+   [docs/todo.md](todo.md) "PWA kickoff scaffold" for implementation detail.
 
 ## Correlations worth keeping in mind
 

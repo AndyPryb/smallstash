@@ -180,7 +180,20 @@ cache/session layering described in the ADR.
       (unchanged afterwards, just re-wrapped under a fresh salt - see
       `rewrapWithNewMasterPassword()`'s existing tests). Verified:
       build/tests clean; **not yet manually run through in a browser.**
-- [ ] **Password generator** (open question #6) - not started.
+- [x] **Password generator** (2026-08-23, resolves open question #6) -
+      `web/src/lib/generator.js` (pure, `crypto.getRandomValues()`-backed,
+      zero deps) + `PasswordGeneratorPanel.svelte`, reachable via a
+      "Generate" button next to the Password field in `VaultView.svelte`'s
+      add-entry form. Length slider (8-64) + toggles for each character
+      type + an "exclude ambiguous characters" (I/l/1/O/0) option, live
+      preview, copy-to-clipboard, "Use this password" fills the entry form.
+      Uses rejection sampling (not naive `byte % n`) to avoid modulo bias
+      when mapping random bytes onto a character set whose size doesn't
+      divide 256 evenly - covered by a dedicated distribution smoke test in
+      `generator.test.js` (9 new tests, 31 total). Verified: build/tests
+      clean; **not yet manually run through in a browser** (in particular,
+      `navigator.clipboard.writeText` behavior across browsers/contexts is
+      worth checking by hand).
 - [ ] **MFA UI** - `web/src/lib/auth/cognito.js` handles the
       `MfaRequiredError`/`submitMfaCode` case from Cognito, but `App.svelte`
       doesn't catch or act on it yet - an MFA-enrolled user's login would
