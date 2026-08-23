@@ -436,6 +436,56 @@ All fixes verified: 31 tests pass, `npm run build` clean, dev server
 hot-reloaded every touched file with no errors (checked the live log, not
 just assumed).
 
+## Frontend test coverage review (2026-08-23)
+
+Asked to review and improve `web/`'s test coverage. Before this, only
+`crypto/` and `generator.js` had any tests (31 total) - `bytes.js`,
+`policy.js`, `cache/db.js`, and **`session.js`** (the orchestration hub
+tying Cognito auth + the API client + crypto + the cache together, and the
+one place allowed to hold the live Vault Key) had zero coverage.
+
+- [x] **`bytes.test.js`/`policy.test.js`** - straightforward pure-function
+      coverage for the two previously-untested small modules.
+- [x] **`cache/db.test.js`** - added `fake-indexeddb` (devDependency) so
+      the IndexedDB-backed offline cache can be tested in plain Node with
+      no browser. Covers put/get round-trips and `isKeyMaterialStale()`'s
+      staleness logic, which had no test at all despite being the thing
+      that decides whether a cached unlock is trustworthy.
+- [x] **`session.test.js`** (26 tests) - the biggest gap, now the biggest
+      addition. Real crypto and the real (fake-indexeddb-backed) cache are
+      used throughout for honesty about what session.js actually does with
+      real key material; only the network-touching boundaries
+      (`auth/cognito.js`, `api/client.js`, `config.js` - the last of which
+      would otherwise throw trying to read `import.meta.env` outside a
+      Vite context) are replaced via `node:test`'s built-in `mock.module()`.
+      Covers sign-in (happy path, wrong Master Password, MFA-required),
+      MFA completion (happy path, wrong-code-is-retryable, no-pending-login
+      guard), offline unlock (happy path, never-cached guard, wrong
+      password), signup/`initializeVault`, `saveVault` (happy path, no
+      session, offline guard), `changeMasterPassword` (happy path
+      confirmed by actually re-unlocking under the new password, no
+      session, offline guard, wrong current password), and the inactivity
+      auto-lock timer using `node:test`'s fake timers (no real 15-minute
+      wait).
+      **Depends on `--experimental-test-module-mocks`** (added to
+      `package.json`'s `test` script) - `mock.module()` is still an
+      experimental Node API as of this writing. Test-only; doesn't affect
+      the shipped browser bundle (verified: build output size unchanged,
+      `fake-indexeddb` doesn't appear in it).
+
+**Found, not fixed - a real, larger gap flagged rather than attempted
+unprompted:** zero Svelte *component* tests exist (`App.svelte`, every form,
+`EntryListItem.svelte`, etc.) - only the `lib/` logic underneath them. The
+current test setup is plain `node:test` with no DOM at all; testing
+components would need new infrastructure (e.g. Vitest +
+`@testing-library/svelte` + jsdom/happy-dom, or Playwright component
+testing) - a deliberate decision to leave to a future session/explicit ask
+rather than bolt on a new test runner and DOM environment as a side effect
+of "improve coverage."
+
+Verified: all 79 tests pass (`npm test`), `npm run build` clean and
+unaffected by the new devDependencies.
+
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
 
 `npm run build` in `web/` produces a working static bundle (verified clean,
