@@ -4,14 +4,27 @@
    * reveal the rest - the password stays masked until explicitly shown, same
    * "don't display secrets unless asked" reasoning as everywhere else the
    * password appears on screen (login/signup forms, generator preview).
+   *
+   * Also owns in-place editing - the "view" and "edit" states are mutually
+   * exclusive within one entry's expanded area, so there's never a stale
+   * read-only view showing alongside an edit form for the same entry.
    */
+  import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
 
-  /** @type {{ entry: { title: string, username: string, password: string, url: string, notes: string }, onremove: () => void }} */
-  let { entry, onremove } = $props();
+  /** @type {{ entry: { title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
+  let { entry, onremove, onupdate } = $props();
 
   let expanded = $state(false);
   let showPassword = $state(false);
   let copied = $state(false);
+
+  let editing = $state(false);
+  let showGenerator = $state(false);
+  let editTitle = $state('');
+  let editUsername = $state('');
+  let editPassword = $state('');
+  let editUrl = $state('');
+  let editNotes = $state('');
 
   async function copyPassword() {
     try {
@@ -44,18 +57,50 @@
   function normalizedUrl(url) {
     return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
   }
+
+  function startEdit() {
+    editTitle = entry.title;
+    editUsername = entry.username;
+    editPassword = entry.password;
+    editUrl = entry.url;
+    editNotes = entry.notes;
+    editing = true;
+  }
+
+  function cancelEdit() {
+    editing = false;
+    showGenerator = false;
+  }
+
+  function saveEdit(event) {
+    event.preventDefault();
+    onupdate({
+      title: editTitle,
+      username: editUsername,
+      password: editPassword,
+      url: editUrl,
+      notes: editNotes,
+    });
+    editing = false;
+    showGenerator = false;
+  }
+
+  function useGeneratedPassword(generated) {
+    editPassword = generated;
+    showGenerator = false;
+  }
 </script>
 
 <li>
   <div class="summary">
-    <button type="button" class="toggle" onclick={() => (expanded = !expanded)}>
+    <button type="button" class="toggle" onclick={() => (expanded = !expanded)} disabled={editing}>
       <strong>{entry.title || '(untitled)'}</strong>
       <span>{entry.username}</span>
     </button>
-    <button type="button" onclick={onremove} aria-label="Delete entry">✕</button>
+    <button type="button" onclick={onremove} aria-label="Delete entry" disabled={editing}>✕</button>
   </div>
 
-  {#if expanded}
+  {#if expanded && !editing}
     <div class="details">
       <div class="field">
         <span class="label">Username</span>
@@ -84,7 +129,34 @@
         <span class="label">Notes</span>
         <p>{entry.notes || '—'}</p>
       </div>
+
+      <div class="row">
+        <button type="button" onclick={startEdit}>Edit</button>
+      </div>
     </div>
+  {/if}
+
+  {#if editing}
+    <form class="edit-form" onsubmit={saveEdit}>
+      <label>Title <input bind:value={editTitle} required /></label>
+      <label>Username <input bind:value={editUsername} /></label>
+      <label>
+        Password
+        <span class="password-row">
+          <input type="text" bind:value={editPassword} />
+          <button type="button" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
+        </span>
+      </label>
+      {#if showGenerator}
+        <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
+      {/if}
+      <label>URL <input bind:value={editUrl} /></label>
+      <label>Notes <textarea bind:value={editNotes}></textarea></label>
+      <div class="row">
+        <button type="submit">Save</button>
+        <button type="button" onclick={cancelEdit}>Cancel</button>
+      </div>
+    </form>
   {/if}
 </li>
 
@@ -113,7 +185,12 @@
     color: inherit;
     font: inherit;
   }
-  .details {
+  .toggle:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .details,
+  .edit-form {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -144,6 +221,27 @@
   .password {
     font-family: monospace;
     letter-spacing: 0.05em;
+  }
+  .row {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .edit-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.9rem;
+  }
+  .edit-form input,
+  .edit-form textarea {
+    padding: 0.4rem;
+  }
+  .password-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .password-row input {
+    flex: 1;
   }
   button {
     padding: 0.3rem 0.6rem;
