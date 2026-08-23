@@ -1,7 +1,11 @@
 <script>
   import LoginForm from './lib/components/LoginForm.svelte';
+  import SignupForm from './lib/components/SignupForm.svelte';
   import VaultView from './lib/components/VaultView.svelte';
   import { signInAndUnlock, clearSession } from './lib/session.js';
+
+  /** @type {'login' | 'signup'} */
+  let authMode = $state('login');
 
   /** @type {object | null} */
   let vaultDocument = $state(null);
@@ -21,6 +25,13 @@
     }
   }
 
+  /** @param {{ vaultDocument: object }} detail */
+  function handleSignupComplete(detail) {
+    error = '';
+    vaultDocument = detail.vaultDocument;
+    authMode = 'login';
+  }
+
   function handleSignOut() {
     clearSession();
     vaultDocument = null;
@@ -38,8 +49,13 @@
 
   {#if vaultDocument}
     <VaultView bind:vaultDocument onsignout={handleSignOut} />
+  {:else if authMode === 'signup'}
+    <SignupForm oncomplete={handleSignupComplete} oncancel={() => (authMode = 'login')} />
   {:else}
     <LoginForm onlogin={handleLogin} {loading} />
+    <p class="switch-mode">
+      No account yet? <button type="button" onclick={() => (authMode = 'signup')}>Create one</button>
+    </p>
   {/if}
 </main>
 
@@ -61,5 +77,18 @@
     border-radius: 6px;
     padding: 0.5rem 0.75rem;
     margin-bottom: 1rem;
+  }
+  .switch-mode {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+  .switch-mode button {
+    background: none;
+    border: none;
+    color: #5ac8a8;
+    cursor: pointer;
+    padding: 0;
+    font-size: inherit;
+    text-decoration: underline;
   }
 </style>

@@ -144,13 +144,20 @@ minimal vault CRUD UI (add/remove entries, save), the full crypto/auth/
 cache/session layering described in the ADR.
 
 **Not yet built, in rough priority order:**
-- [ ] **Signup UI** - self-service `SignUp`/`ConfirmSignUp` (email
-      verification code) + first-run `initializeVault()` call (already
-      written in `session.js`, not wired to any UI) + the "write this
-      Recovery Key down now, it's shown once" screen. Today the only way
-      to create an account is still the manual `admin-create-user` test
-      user (see below).
-- [ ] **Offline unlock affordance** - see item directly above.
+- [x] **Signup UI** (2026-08-23) - `web/src/lib/components/SignupForm.svelte`,
+      a 3-step flow: register (Cognito `SignUp`) -> confirm (emailed code,
+      `ConfirmSignUp`) -> recovery (sign in + `initializeVault()`, show the
+      Recovery Key once with a "saved it" checkbox gating continue). Wired
+      into `App.svelte` via a "Create one" toggle next to the login form.
+      `session.js` gained `registerAccount`/`confirmAccount`/
+      `signUpAndInitializeVault` to support it. Not yet tested against the
+      live pool end-to-end with a real inbox (only build/unit-test verified)
+      - worth a manual run-through before relying on it. The manual
+      `admin-create-user` test user (see below) is no longer the *only* way
+      to create an account, but is untouched/still valid for existing test
+      scripts.
+- [ ] **Offline unlock affordance** - `session.js`'s offline path
+      (`unlockOffline`) has no UI trigger yet.
 - [ ] **Change Master Password UI** - `rewrapWithNewMasterPassword()` is
       implemented and tested in `web/src/lib/crypto/vault.js`, has no UI yet.
 - [ ] **Password generator** (open question #6) - not started.
