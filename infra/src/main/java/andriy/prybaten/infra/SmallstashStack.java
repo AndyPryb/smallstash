@@ -126,10 +126,9 @@ public class SmallstashStack extends Stack {
         // SRP only, no other auth flow - the production end state. Real
         // clients (the PWA) test via Cognito Hosted UI's OAuth2 flow, which
         // does SRP internally, not a shortcut around it. `.adminUserPassword(true)`
-        // was here temporarily for Postman-based manual testing (Postman can't
-        // do SRP's bignum math itself - see docs/architecture.md/todo.md for
-        // the full reasoning) - reverted now that the target is a
-        // production-ready PWA, not further Postman convenience.
+        // was here temporarily for manual testing without implementing SRP
+        // client-side (see docs/todo.md) - reverted now that the target is
+        // automated JS tests using a real SRP-capable client library instead.
         // generateSecret(false): this is a public client (browser PWA), it
         // can't keep a client secret confidential.
         UserPoolClient userPoolClient = userPool.addClient("WebClient", UserPoolClientOptions.builder()

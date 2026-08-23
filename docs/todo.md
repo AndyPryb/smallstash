@@ -184,62 +184,33 @@ fields don't do anything yet:
       checks, adaptive auth) - skip for now, personal-scale traffic doesn't
       justify it.
 
-## Postman collection (2026-08-23) — auth shortcut reverted, see below
+## API testing approach — Postman tried and abandoned, JS automated tests next (2026-08-23)
 
-`postman/smallstash.postman_collection.json` + paired
-`postman/smallstash.postman_environment.json` - import both, select the
-environment, then get a token (see below) and paste it into the
-environment's `access_token` variable.
+Manual testing was briefly done via a Postman collection (created, exercised
+partially, then removed). Abandoned because Postman's pre-request script
+sandbox can't do SRP - no package-loading mechanism to pull in a real
+implementation like `amazon-cognito-identity-js`, and no safe way to mint
+tokens via `admin-initiate-auth` either (that flow needs privileged AWS IAM
+credentials, which shouldn't be embedded in a Postman environment - a much
+bigger secret than a 1hr JWT). The `.adminUserPassword(true)` admin-only
+auth-flow workaround that briefly existed to route around this was also
+reverted - back to SRP-only on the app client, the intended production
+end-state.
 
-- [x] **`.adminUserPassword(true)` reverted in code** (2026-08-23) -
-      `SmallstashStack.java` is back to SRP-only on the app client, the
-      intended production end-state. Verified via `cdk synth`:
-      `ExplicitAuthFlows` is now just `['ALLOW_USER_SRP_AUTH',
-      'ALLOW_REFRESH_TOKEN_AUTH']`. **Not deployed yet** - the currently
-      *live* pool still has `ALLOW_ADMIN_USER_PASSWORD_AUTH` until the
-      next `cdk deploy`.
-- [ ] **Consequence once this actually deploys: the `admin-initiate-auth`
-      token command below stops working**, and so does the Postman
-      collection's pre-request auto-reuse (nothing to reuse once you
-      can't mint a token this way anymore). This was a deliberate
-      tradeoff, not an oversight - reverting to SRP-only was chosen over
-      continued Postman convenience once the goal shifted to
-      production-readiness for the PWA. Future manual API testing needs
-      either the Hosted UI + OAuth2-in-Postman guide below, or a real
-      SRP-capable client (the PWA itself, once it exists).
-- [x] (Historical, while the admin flow was still live) Token command
-      used during this session - IDs from the 2026-08-23 full recreate:
-      ```
-      aws cognito-idp admin-initiate-auth \
-        --user-pool-id eu-west-1_CY70Hunz3 \
-        --client-id es8shgod8c4glft5nrn1hennc \
-        --auth-flow ADMIN_USER_PASSWORD_AUTH \
-        --auth-parameters USERNAME=test@example.com,PASSWORD='<TEST_USER_PASSWORD - do not commit, see your own local notes>' \
-        --region eu-west-1
-      ```
-- [x] **Smart reuse, not blind re-fetch or blind resend** (still in the
-      collection, harmless once the admin flow is gone - it'll just
-      always report "missing/expired" and point at a command that no
-      longer works, which is at least an honest failure mode): a
-      collection-level pre-request script decodes the cached token's own
-      `exp` claim and reuses it silently while valid.
-- [ ] **Fuller automation was considered, not built**: the pre-request
-      script could have minted tokens itself with zero manual steps, by
-      additionally enabling the *public* (non-admin) `ALLOW_USER_PASSWORD_AUTH`
-      flow and calling Cognito's plain `InitiateAuth` API directly via
-      `pm.sendRequest()` - moot now that the auth-flow reduction went the
-      other direction (removing admin access rather than adding another
-      flow). Leaving this note for context, not as something to still do.
-- [ ] Real Hosted UI + OAuth2-in-Postman guide (below) is still the
-      more production-realistic path, worth doing once the PWA exists -
-      the `admin-initiate-auth` shortcut above is a testing convenience,
-      not a replacement for it.
+- [ ] **Next: automated API tests in JavaScript/Node**, using the real
+      `amazon-cognito-identity-js` library for actual SRP authentication -
+      a real Node environment has full `BigInt` + npm package access that
+      Postman's sandbox lacks. Doubles as an early prototype of the PWA's
+      own auth code. Part of the next session's PWA kickoff, not started
+      yet.
+- [ ] Cognito **Hosted UI** + OAuth2 flow is still worth setting up
+      eventually for interactive/manual testing once the PWA exists - a
+      separate, still-open item, not replaced by the automated tests above.
 
 ## Guides owed to you (ask when ready, not needed yet)
 
-- [ ] How to turn on Cognito **Hosted UI** and configure Postman's OAuth 2.0
-      auth tab against it (authorization-code grant) for manual API testing
-      against the real deployed stack.
+- [ ] How to turn on Cognito **Hosted UI** (authorization-code grant) for
+      interactive/manual testing against the real deployed stack.
 - [ ] Tightening the deploy IAM user's policy beyond the initial broad grant,
       once the CDK stack's actual resource set is stable.
 - [ ] Moving CI/CD off the static access-key IAM user onto GitHub Actions
