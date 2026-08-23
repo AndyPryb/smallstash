@@ -30,8 +30,12 @@ itself. Full design: [docs/architecture.md](docs/architecture.md).
   AWS-account-mutating command) needs explicit user confirmation before
   running, every time — prior approval doesn't carry over to the next
   session or the next deploy.
-- **Don't `git push` without being asked.** Committing locally is fine;
-  publishing is a separate, explicit ask.
+- **Never run `git commit` (or `git push`) unless explicitly told to, for
+  that specific change, right now.** Editing/writing files is fine on your
+  own initiative; committing is not. An earlier "yes, commit" does **not**
+  carry over to later changes in the same or a later session — ask again
+  every time. If asked to "update docs" or similar without the word
+  commit/push, that means edit the files and stop there.
 - Prefer **CDK code changes over AWS console clicks** — the user wants
   console interaction minimized. If something was changed by hand in the
   console, that's a bug to fix in `infra/`, not a pattern to repeat.
