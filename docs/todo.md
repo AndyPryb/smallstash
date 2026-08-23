@@ -324,6 +324,26 @@ not a new one, just newly visible now that offline unlock exists at all.
 All fixes verified: 31 tests pass, `npm run build` clean, dev server
 compiles every touched file with no errors.
 
+### Follow-up: global theme was missing entirely (2026-08-23, found by the user)
+
+Reported as "black text on black background" when reading entries. Root
+cause: `EntryListItem.svelte`'s expanded entry view, `PasswordGeneratorPanel`'s
+preview box, and `SignupForm`'s Recovery Key display all use a dark
+background (`#14171b`) on the assumption of a dark theme (matching the app
+icon and the manifest's `theme_color`/`background_color`), but nothing had
+ever actually set the *page's own* background or default text color -
+browsers fell back to their own default (white background, black text), so
+those dark boxes ended up with black text on a near-black background.
+
+Fixed in `App.svelte` (the root component, so it applies everywhere):
+`:global(html) { color-scheme: dark; }` + `:global(body) { background:
+#1b1f24; color: #e6e6e6; }`. `color-scheme: dark` also makes native form
+controls (text inputs, checkboxes, the password generator's range slider)
+render with the browser's built-in dark styling automatically. Verified: no
+other component sets a light background that this default text color would
+now clash with (checked via grep across `web/src`); 31 tests pass, build
+clean, dev server hot-reloaded the fix live.
+
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
 
 `npm run build` in `web/` produces a working static bundle (verified clean,
