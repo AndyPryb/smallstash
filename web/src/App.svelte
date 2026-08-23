@@ -236,6 +236,31 @@
 </main>
 
 <style>
+  /**
+   * Global page theme - was missing entirely until now, which is the actual
+   * bug behind "black text on black background": several boxes elsewhere
+   * (EntryListItem's expanded entry view, the password generator preview,
+   * the signup Recovery Key display) use a dark background (#14171b) on the
+   * assumption of a dark theme (matching the manifest's theme_color/
+   * background_color and the app icon), but nothing ever set the page's own
+   * background or default text color - browsers fell back to their default
+   * (white background, black text), so those dark boxes had black text on
+   * a near-black background with nothing readable in between.
+   *
+   * `color-scheme: dark` additionally makes native form controls (text
+   * inputs, checkboxes, the password generator's range slider) render with
+   * the browser's built-in dark styling automatically, instead of a stray
+   * white input box on an otherwise dark page.
+   */
+  :global(html) {
+    color-scheme: dark;
+  }
+  :global(body) {
+    margin: 0;
+    background: #1b1f24;
+    color: #e6e6e6;
+  }
+
   main {
     max-width: 640px;
     margin: 0 auto;
