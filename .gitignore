@@ -17,6 +17,10 @@ out/
 # Personal/local tool config - not shared project state
 .claude/settings.local.json
 
+# Personal learning notes - plain-language explainers for re-reading later,
+# deliberately not shared/committed project documentation
+docs/learning-notes/
+
 # Never commit real secrets/credentials
 .env
 .env.*

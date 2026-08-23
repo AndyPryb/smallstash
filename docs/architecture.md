@@ -13,6 +13,13 @@ possibly grow into a small multi-user thing later — not enterprise.**
 Optimize for near-zero idle cost and low operational burden over
 scalability headroom we don't need yet.
 
+**Current status (2026-08-20):** backend code and the `infra/` CDK stack
+are both written and verified locally (compiles, tests written, CDK
+synthesizes cleanly) — **but nothing has been deployed to AWS.** No
+Cognito pool, bucket, table, Lambda, or API exists yet. See §9 for the
+full breakdown, [CLAUDE.md](../CLAUDE.md) for the always-current one-line
+version.
+
 ---
 
 ## 1. System overview
@@ -159,7 +166,17 @@ becomes an observed problem.
   password" (a standard Cognito-managed email reset flow) completely
   decoupled from vault recovery, which must stay the deliberate,
   user-driven Recovery Key flow — conflating the two would either weaken
-  vault security or complicate the reset UX. **Confirmed.**
+  vault security or complicate the reset UX. **Confirmed.** See
+  [learning-notes/srp-authentication.md](learning-notes/srp-authentication.md)
+  (gitignored, personal) for how the login side actually works mechanically.
+- **App client: SRP-only**, no `ALLOW_USER_PASSWORD_AUTH` fallback — even
+  for testing. Manual API testing against a real deployment goes through
+  Cognito's **Hosted UI** (OAuth2 authorization-code grant), which does
+  SRP internally, so this doesn't compromise testability (guide owed, see
+  [todo.md](todo.md)).
+- **Optional TOTP MFA** on the Cognito login step — cheap, adds a layer
+  independent of the vault's own crypto. Not required, user's choice at
+  signup.
 
 ## 6. Cost model (why this stays cheap)
 
@@ -187,15 +204,29 @@ picture versus S3-only — both land at "effectively free" for a personal
 project — but it does improve login latency and sets up cleaner
 multi-user metadata handling for later.
 
-## 7. Infra-as-code (recommendation, open question #7)
+## 7. Infra-as-code — AWS CDK, Java (confirmed, built)
 
-**Recommended default: AWS CDK, Java.** Reasoning: the backend is already
-Java/Maven, so CDK-in-Java keeps one language across app and infra code —
-no context-switch to HCL (Terraform) or YAML (SAM) for a solo maintainer.
-CDK also has first-class constructs for exactly this stack (Lambda,
-HTTP API + Cognito authorizer, DynamoDB table, S3 bucket with versioning).
-Terraform remains a fine alternative if multi-cloud portability or a
-declarative-diff workflow is preferred — flag if that's the case.
+Reasoning: the backend is already Java/Maven, so CDK-in-Java keeps one
+language across app and infra code — no context-switch to HCL (Terraform)
+or YAML (SAM) for a solo maintainer. CDK also has first-class constructs
+for exactly this stack (Lambda, HTTP API + Cognito authorizer, DynamoDB
+table, S3 bucket with versioning).
+
+Lives in `infra/` — a standalone Maven project (not a `<module>` of the
+root `pom.xml`), since it's unrelated to the backend at build time; it
+only references the backend's build **output** (`../target/smallstash-0.1.jar`),
+never its source. Deploy account is dynamic (whichever credentials are
+active); **region is pinned explicitly to `eu-west-1`** in `SmallstashApp`
+(broadest EU service coverage, cheapest EU region — chosen over
+`eu-central-1`/others, see chat history for the comparison; not yet
+written up as a standalone doc).
+
+Deploys run as a dedicated IAM user, `smallstash-deployer`
+(`infra/scripts/create-deployer-user.sh`, run once from CloudShell as
+root) — `PowerUserAccess` plus a custom policy scoping IAM role/policy
+management to `smallstash-*`/`cdk-*` resource names, not root and not a
+personal admin account. See [todo.md](todo.md) for the honest caveat on
+how far that scoping actually goes.
 
 ## 8. Phased roadmap
 
@@ -263,12 +294,40 @@ Backend v1 storage + auth-scaffolding slice is built (this session):
   `mvn test-compile` (clean compile, all API usage type-checks) but not
   actually executed end-to-end. Run `mvn test` locally with Docker
   Desktop up before trusting them fully.
-- **Not built yet:** Cognito user pool itself (no IaC yet, see open
-  question #4), signup flow wiring `keys` write to a Cognito
-  post-confirmation trigger vs. an explicit client call, HTTP API +
-  authorizer provisioning, `application-lambda.properties`
-  `COGNITO_JWKS_URL` is a required-but-unset placeholder until the pool
-  exists.
+- **Not built yet:** signup flow wiring `keys` write to a Cognito
+  post-confirmation trigger vs. an explicit client call; the PWA client
+  itself (nothing to call these APIs from yet).
+
+### 9b. Infra (`infra/` — CDK, Java) — defined and verified, NOT deployed
+
+`SmallstashStack` (`infra/src/main/java/andriy/prybaten/infra/`) defines,
+as code, every AWS resource this project needs:
+
+- Cognito User Pool — self-signup, SRP-only client, optional TOTP MFA,
+  strong password policy, `RETAIN` removal policy.
+- DynamoDB `smallstash-users` table (PAY_PER_REQUEST, `RETAIN`).
+- S3 vault bucket (versioned, `RETAIN`, CDK-generated name — not
+  hardcoded, since S3 names are globally unique; passed to the Lambda via
+  env var).
+- The backend Lambda itself, `Runtime.JAVA_25`, handler
+  `io.micronaut.function.aws.proxy.payload2.APIGatewayV2HTTPEventFunction`,
+  with `MICRONAUT_SECURITY_ENABLED`, `COGNITO_JWKS_URL`,
+  `MICRONAUT_ENVIRONMENTS=lambda`, and the bucket/table names all wired
+  automatically from the resources the same stack creates — not a
+  manually-remembered post-deploy step.
+- HTTP API with a native `HttpUserPoolAuthorizer`, explicit throttling
+  (rate 10/s, burst 20 — cheap insurance given real usage is a handful of
+  requests every few days; AWS's much higher account-level default stays
+  in place regardless), and CORS (currently allowing a `localhost:5173`
+  placeholder origin — must be updated once the PWA has a real domain).
+
+**Verified:** compiles against real `aws-cdk-lib 2.252.0`; a full local
+synth (`mvn compile exec:java` from `infra/` — equivalent to `cdk synth`,
+no AWS calls) runs clean end to end.
+
+**Not run, deliberately: `cdk bootstrap` / `cdk deploy`.** No AWS resource
+from this stack exists yet. See [todo.md](todo.md) "first-deploy
+checklist" before that ever happens.
 
 ## 10. Dependencies (Maven, current — from `pom.xml`)
 
