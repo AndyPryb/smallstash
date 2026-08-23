@@ -30,8 +30,13 @@ in `.env` (like `TEST_USER_PASSWORD`) never reaches shipped JS.
 npm run dev       # http://localhost:5173, live-reloads, talks to the real deployed API
 npm run build     # production build -> dist/ (static files, no server needed to host them)
 npm run preview   # serve the dist/ build locally, to sanity-check the built output
-npm test          # 22 tests, node's built-in test runner, no browser needed
+npm test          # 79 tests, node's built-in test runner, no browser needed
 ```
+
+`npm test` runs with `--experimental-test-module-mocks` (see `package.json`) -
+needed for `session.test.js`'s use of `node:test`'s `mock.module()`, which is
+still an experimental Node API. Test-only; doesn't affect anything shipped
+to the browser.
 
 There is no local backend to run against — `web/` always talks to the
 **live deployed** API (same as `tests/api/`). There's nothing to mock: the
@@ -77,6 +82,30 @@ src/lib/components/  Svelte UI components.
 - `crypto/vault.test.js` — the full flow: create key material, unlock via
   Master Password, unlock via Recovery Key, change Master Password
   (re-wrap), encrypt/decrypt a vault document.
+- `generator.test.js` — character-set/length options, a distribution smoke
+  test guarding against a regression to naive modulo bias.
+- `bytes.test.js` / `policy.test.js` — the small pure-function modules
+  (base64/UTF-8 round-trips, `wipe()`, Master Password length policy).
+- `cache/db.test.js` — the IndexedDB-backed offline cache, using
+  `fake-indexeddb` (dev-only dependency) so it runs in plain Node with no
+  browser: put/get round-trips, staleness detection, per-account clearing.
+- `session.test.js` — the orchestration hub (Cognito auth + the API client +
+  crypto + the cache all meet here) got zero coverage until now, which was
+  backwards for the highest-stakes module in the app. Uses real crypto and
+  the real (fake-indexeddb-backed) cache throughout; only the
+  network-touching boundaries (`auth/cognito.js`, `api/client.js`,
+  `config.js`) are replaced via `node:test`'s `mock.module()`. Covers the
+  full sign-in/MFA/offline-unlock/signup/save/change-Master-Password flows
+  (happy paths and the actual failure modes - wrong password, wrong MFA
+  code, offline write rejection, no active session) plus the inactivity
+  auto-lock timer (via `node:test`'s fake timers - no real 15-minute wait).
+
+**Not covered, and a real gap:** no Svelte *component* tests exist (`App.svelte`,
+the forms, `EntryListItem.svelte`, etc.) - only the `lib/` logic underneath
+them. The current test setup is plain `node:test` with no DOM; component
+testing would need new infrastructure (e.g. Vitest + `@testing-library/svelte`
++ jsdom/happy-dom, or Playwright component testing) - a deliberate choice to
+flag rather than bolt on unprompted. See `docs/todo.md`.
 
 ## What's not built yet
 
