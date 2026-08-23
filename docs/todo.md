@@ -226,6 +226,18 @@ cache/session layering described in the ADR.
       timeout actually elapsing** (15 minutes of real wall-clock time is
       impractical to sit through here - worth either a quick manual check
       with a temporarily-shortened timeout, or trusting the code review).
+- [x] **View existing entry details** (2026-08-23, found via manual testing
+      by the user, not originally on this list) - the entry list only ever
+      rendered `title`/`username` + a delete button; `password`/`url`/`notes`
+      were stored and round-tripped correctly but nothing in the UI ever
+      surfaced them again after adding an entry - a real usability bug, not
+      a regression from a later change (present since the original VaultView
+      scaffold). Fixed: `EntryListItem.svelte` - click an entry to expand it,
+      showing Username/Password (masked by default, "Show"/"Copy"
+      buttons)/URL (as a link)/Notes. Verified: build/tests clean, dev
+      server compiles. **Editing an existing entry is still not possible**
+      (only add/delete/view) - a natural next gap, not yet on this list
+      until now: worth its own future item if it's ever picked up.
 - [ ] **Deploy `web/dist/` - see the dedicated section below, not started.**
 
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
