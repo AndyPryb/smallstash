@@ -7,6 +7,7 @@ import { getKeys, putKeys, getVault, putVault } from './api/client.js';
 import {
   createKeyMaterial,
   unlockWithMasterPassword,
+  rewrapWithNewMasterPassword,
   encryptVault,
   decryptVault,
 } from './crypto/vault.js';
@@ -206,6 +207,40 @@ export async function saveVault(vaultDocument) {
   const ciphertextBase64 = await encryptVault(active.vaultKey, vaultDocument);
   const { versionId } = await putVault(active.idToken, ciphertextBase64);
   await cacheVault(active.sub, ciphertextBase64, versionId);
+}
+
+/**
+ * Change the Master Password. Requires an online session (uploads new
+ * wrapped-key material) and the *current* Recovery Key (rewrapWithNewMasterPassword
+ * needs it to re-wrap that copy too, under the new salt - see crypto/vault.js).
+ *
+ * Re-derives from `currentMasterPassword` and requires it to actually unwrap
+ * the stored Vault Key before proceeding, even though the active session
+ * already holds the unwrapped key in memory - that's the whole point of
+ * asking for it again here, rather than letting anyone at an
+ * already-unlocked, unattended tab change it without knowing it.
+ *
+ * @param {string} currentMasterPassword
+ * @param {string} newMasterPassword
+ * @param {string} recoveryKeyInput the account's existing Recovery Key -
+ *   unchanged by this operation, still valid afterwards (re-wrapped under a
+ *   fresh salt, same recovery phrase)
+ */
+export async function changeMasterPassword(currentMasterPassword, newMasterPassword, recoveryKeyInput) {
+  if (!active) throw new Error('No active session');
+  if (!active.idToken) throw new Error('Cannot change Master Password while offline - reconnect and sign in again');
+
+  const currentUserKeys = await getKeys(active.idToken);
+  const verifiedVaultKey = await unlockWithMasterPassword(currentUserKeys, currentMasterPassword);
+  wipe(verifiedVaultKey);
+
+  const newUserKeys = await rewrapWithNewMasterPassword({
+    vaultKey: active.vaultKey,
+    newMasterPassword,
+    recoveryKeyInput,
+  });
+  await putKeys(active.idToken, newUserKeys);
+  await cacheKeyMaterial(active.sub, newUserKeys);
 }
 
 /**
