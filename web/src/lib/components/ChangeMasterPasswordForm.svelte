@@ -72,7 +72,14 @@
 
       <label>
         Recovery Key
-        <input bind:value={recoveryKeyInput} autocomplete="off" required />
+        <input
+          bind:value={recoveryKeyInput}
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          required
+        />
         <small>Your existing Recovery Key, from when this account was created - needed to re-wrap it under the new password too. It stays the same afterwards.</small>
       </label>
 

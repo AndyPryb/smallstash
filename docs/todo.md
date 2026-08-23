@@ -237,20 +237,18 @@ cache/session layering described in the ADR.
       buttons)/URL (as a link)/Notes.
 - [x] **Edit existing vault entries** (2026-08-23) - `EntryListItem.svelte`
       gained an "Edit" button (shown in the expanded view) that swaps in an
-      inline edit form for that entry - Title/Username/Password (plain text
-      while editing, not masked - editing a value you can't see is painful;
-      includes the same "Generate" password-generator button as the add-entry
-      form)/URL/Notes, Save/Cancel. `VaultView.svelte` gained `updateEntry()`
-      to replace the edited entry in place. Before this, add/delete/view was
-      all that existed - no way to fix a typo or rotate a password without
-      deleting and re-adding the whole entry.
-      **Known pre-existing limitation, not introduced by this change:** the
-      entry list is keyed by array index (`{#each ... (i)}`), not a stable
-      per-entry ID - entries have no ID field at all. This is fine for
-      today's straight-line add/edit/delete-one-at-a-time usage, but could
-      misattribute a component's local UI state (e.g. `expanded`) to the
-      wrong row in a more complex reordering scenario. Not worth a
-      migration to add IDs unless a real symptom shows up.
+      inline edit form for that entry - Title/Username/Password (masked by
+      default with a Show/Hide toggle, same as view mode - see the
+      "Frontend-only best-practice review" section below, which fixed an
+      initial version of this that used an always-visible plain-text field;
+      includes the same "Generate" password-generator button as the
+      add-entry form)/URL/Notes, Save/Cancel. `VaultView.svelte` gained
+      `updateEntry()` to replace the edited entry in place. Before this,
+      add/delete/view was all that existed - no way to fix a typo or
+      rotate a password without deleting and re-adding the whole entry.
+      **Index-keying limitation noted here originally - since fixed**, see
+      "Frontend-only best-practice review" below (entries now get a stable
+      `crypto.randomUUID()` id).
       Verified: all 31 tests pass, `npm run build` clean, dev server
       compiles with no errors.
 - [ ] **Deploy `web/dist/` - see the dedicated section below, not started.**
@@ -343,6 +341,100 @@ render with the browser's built-in dark styling automatically. Verified: no
 other component sets a light background that this default text color would
 now clash with (checked via grep across `web/src`); 31 tests pass, build
 clean, dev server hot-reloaded the fix live.
+
+## Frontend-only best-practice review (2026-08-23)
+
+Asked for a general "make it a best-practice client app" pass, frontend
+only - explicitly no backend/CI/CD changes, but flag anything that *would*
+need one. Found and fixed several real gaps:
+
+- [x] **Silent data loss on sign-out/tab-close with unsaved edits** - the
+      biggest find. Nothing tracked whether `vaultDocument` had unsaved
+      changes; clicking "Sign out" (or just closing the tab) after
+      editing/adding/deleting entries without clicking "Save vault" first
+      discarded those changes with zero warning. `VaultView.svelte` now
+      tracks a `dirty` flag (compares current vs. last-saved JSON
+      snapshot), shows an "Unsaved changes" indicator next to the toolbar,
+      confirms before sign-out if dirty, and warns via the standard
+      `beforeunload` browser prompt if the tab is closed/reloaded while
+      dirty.
+- [x] **No delete confirmation** - clicking an entry's ✕ deleted it
+      immediately, no undo, no "are you sure?". `EntryListItem.svelte` now
+      confirms first.
+- [x] **Entry list keyed by array index, not a stable ID** - flagged as a
+      known limitation in the previous "Edit existing vault entries" entry
+      above; fixed now. Every entry gets a `crypto.randomUUID()` `id` at
+      creation (existing entries without one are backfilled on load); the
+      `{#each}` list is now keyed by `entry.id`. Purely a client-side data
+      shape change - the `id` field lives inside the encrypted blob, the
+      backend never sees vault entry structure at all either way.
+- [x] **Edit-mode password field contradicted the component's own stated
+      security principle** - `EntryListItem.svelte`'s header comment says
+      "the password stays masked until explicitly shown", but the edit
+      form added in the previous commit used an always-visible plain-text
+      field. Now shares the same `showPassword` toggle as view mode
+      (masked by default, in both modes).
+- [x] **Add-entry password field had no way to verify what you typed** -
+      unlike editing (plain text) or the generator preview (visible),
+      adding a *new* entry's password was `type="password"` with no
+      reveal toggle at all - a typo would go unnoticed until the next
+      login attempt with that entry failed. Added a Show/Hide toggle,
+      consistent with everywhere else a password appears.
+- [x] **Newly-generated passwords required an extra click to see** - after
+      "Use this password" from the generator, both the add-entry and
+      edit-entry password fields now auto-reveal (`showPassword = true`),
+      matching common password manager behavior (Bitwarden/LastPass do the
+      same) - you just consciously generated it, you'll want to see it.
+- [x] **Signup Recovery Key had no Copy button** - only a checkbox to
+      confirm it was saved, forcing manual transcription; every other
+      secret-reveal spot in the app (password generator, entry view) has a
+      Copy button. Added one, plus `font-family: monospace` for legibility
+      of the Base32 code (mirrors `EntryListItem`'s password styling).
+- [x] **Minor**: `aria-expanded` on the entry expand/collapse toggle
+      (screen readers previously had no way to know its state);
+      `word-break: break-all` on the entry password display and
+      `min-width: 0` on flex password rows (both prevent a long generated
+      password from overflowing its container on narrow screens);
+      `autocomplete="one-time-code"` added to the signup confirmation code
+      field (already present on the MFA code field, missed here);
+      `autocapitalize`/`autocorrect`/`spellcheck` disabled on the Recovery
+      Key input in `ChangeMasterPasswordForm` (mobile keyboards otherwise
+      fight a Base32 code); `type="button"` made explicit on `VaultView`'s
+      toolbar buttons (harmless today since they're not inside a `<form>`,
+      but the HTML-spec-correct default for a bare `<button>` is
+      `submit`); added a `<meta name="description">` to `index.html`.
+
+**Found, not fixed - would need a backend change:**
+- [ ] **No optimistic concurrency on `PUT /vault`** - the write is a blind
+      overwrite; if the same account is edited from two tabs/devices
+      concurrently, the second `saveVault()` silently discards whatever
+      the first one wrote, with no conflict warning either side. Fixing
+      this needs backend work (e.g. `VaultController`/`S3VaultRepository`
+      taking the `versionId` from the last `GET /vault` and using S3's
+      conditional-write support to reject a stale `PUT`), not something
+      fixable from `web/` alone. Related to, but distinct from, the
+      already-documented "offline edits lost on reconnect" limitation
+      above and the "multi-device conflict resolution" v2+ item in
+      ADR-0001 - flagging as its own item since it's a narrower, more
+      fixable slice (same-session concurrent writes, not full offline
+      sync).
+
+**Found, not fixed - asset/tooling gap, not a code change:**
+- [ ] **No `apple-touch-icon` PNG for iOS "Add to Home Screen"** - iOS
+      Safari ignores the web manifest's icons for the home-screen icon;
+      it specifically needs a `<link rel="apple-touch-icon">` pointing at
+      a PNG (traditionally 180x180). Only SVG icons exist today
+      (`web/public/icon.svg`/`icon-maskable.svg`). No SVG-to-PNG
+      rasterizer was available in this session's sandbox (checked for
+      `rsvg-convert`/`inkscape`/ImageMagick/the `sharp` npm package - none
+      present) and installing a new dependency for one asset felt
+      disproportionate to do unprompted. Needs either a rasterizer
+      available locally, or generating the PNG by some other means, then
+      adding the `<link>` tag to `index.html`.
+
+All fixes verified: 31 tests pass, `npm run build` clean, dev server
+hot-reloaded every touched file with no errors (checked the live log, not
+just assumed).
 
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
 

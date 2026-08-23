@@ -1,17 +1,23 @@
 <script>
   /**
    * One vault entry, collapsed to title/username by default with a toggle to
-   * reveal the rest - the password stays masked until explicitly shown, same
-   * "don't display secrets unless asked" reasoning as everywhere else the
-   * password appears on screen (login/signup forms, generator preview).
+   * reveal the rest - the password stays masked until explicitly shown (in
+   * both view and edit mode), same "don't display secrets unless asked"
+   * reasoning as everywhere else the password appears on screen (login/
+   * signup forms, generator preview). `showPassword` is shared between view
+   * and edit so toggling it once carries over into editing the same entry.
    *
    * Also owns in-place editing - the "view" and "edit" states are mutually
    * exclusive within one entry's expanded area, so there's never a stale
    * read-only view showing alongside an edit form for the same entry.
+   *
+   * `onremove`/`onupdate` are id-keyed by the caller (VaultView.svelte),
+   * not index-keyed - this component doesn't need to know its own position
+   * in the list.
    */
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
 
-  /** @type {{ entry: { title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
+  /** @type {{ entry: { id: string, title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
   let { entry, onremove, onupdate } = $props();
 
   let expanded = $state(false);
@@ -88,16 +94,32 @@
   function useGeneratedPassword(generated) {
     editPassword = generated;
     showGenerator = false;
+    // A password the user just consciously generated is one they'll want to
+    // see/verify immediately, not re-hide-then-un-hide - matches common
+    // password manager behavior (LastPass/Bitwarden do the same).
+    showPassword = true;
+  }
+
+  function handleRemove() {
+    if (confirm(`Delete "${entry.title || '(untitled)'}"? It's only permanent once you click "Save vault".`)) {
+      onremove();
+    }
   }
 </script>
 
 <li>
   <div class="summary">
-    <button type="button" class="toggle" onclick={() => (expanded = !expanded)} disabled={editing}>
+    <button
+      type="button"
+      class="toggle"
+      onclick={() => (expanded = !expanded)}
+      disabled={editing}
+      aria-expanded={expanded}
+    >
       <strong>{entry.title || '(untitled)'}</strong>
       <span>{entry.username}</span>
     </button>
-    <button type="button" onclick={onremove} aria-label="Delete entry" disabled={editing}>✕</button>
+    <button type="button" onclick={handleRemove} aria-label="Delete entry" disabled={editing}>✕</button>
   </div>
 
   {#if expanded && !editing}
@@ -143,7 +165,10 @@
       <label>
         Password
         <span class="password-row">
-          <input type="text" bind:value={editPassword} />
+          <input type={showPassword ? 'text' : 'password'} bind:value={editPassword} />
+          <button type="button" onclick={() => (showPassword = !showPassword)}>
+            {showPassword ? 'Hide' : 'Show'}
+          </button>
           <button type="button" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
         </span>
       </label>
@@ -221,6 +246,7 @@
   .password {
     font-family: monospace;
     letter-spacing: 0.05em;
+    word-break: break-all;
   }
   .row {
     display: flex;
@@ -242,6 +268,7 @@
   }
   .password-row input {
     flex: 1;
+    min-width: 0;
   }
   button {
     padding: 0.3rem 0.6rem;
