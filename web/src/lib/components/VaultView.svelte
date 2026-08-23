@@ -42,6 +42,10 @@
     vaultDocument.entries = vaultDocument.entries.filter((_, i) => i !== index);
   }
 
+  function updateEntry(index, updatedEntry) {
+    vaultDocument.entries = vaultDocument.entries.map((existing, i) => (i === index ? updatedEntry : existing));
+  }
+
   async function persist() {
     saveError = '';
     saving = true;
@@ -80,7 +84,7 @@
 
   <ul class="entries">
     {#each vaultDocument.entries as entry, i (i)}
-      <EntryListItem {entry} onremove={() => removeEntry(i)} />
+      <EntryListItem {entry} onremove={() => removeEntry(i)} onupdate={(updated) => updateEntry(i, updated)} />
     {:else}
       <li class="empty">No entries yet.</li>
     {/each}

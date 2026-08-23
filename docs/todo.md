@@ -234,10 +234,25 @@ cache/session layering described in the ADR.
       a regression from a later change (present since the original VaultView
       scaffold). Fixed: `EntryListItem.svelte` - click an entry to expand it,
       showing Username/Password (masked by default, "Show"/"Copy"
-      buttons)/URL (as a link)/Notes. Verified: build/tests clean, dev
-      server compiles. **Editing an existing entry is still not possible**
-      (only add/delete/view) - a natural next gap, not yet on this list
-      until now: worth its own future item if it's ever picked up.
+      buttons)/URL (as a link)/Notes.
+- [x] **Edit existing vault entries** (2026-08-23) - `EntryListItem.svelte`
+      gained an "Edit" button (shown in the expanded view) that swaps in an
+      inline edit form for that entry - Title/Username/Password (plain text
+      while editing, not masked - editing a value you can't see is painful;
+      includes the same "Generate" password-generator button as the add-entry
+      form)/URL/Notes, Save/Cancel. `VaultView.svelte` gained `updateEntry()`
+      to replace the edited entry in place. Before this, add/delete/view was
+      all that existed - no way to fix a typo or rotate a password without
+      deleting and re-adding the whole entry.
+      **Known pre-existing limitation, not introduced by this change:** the
+      entry list is keyed by array index (`{#each ... (i)}`), not a stable
+      per-entry ID - entries have no ID field at all. This is fine for
+      today's straight-line add/edit/delete-one-at-a-time usage, but could
+      misattribute a component's local UI state (e.g. `expanded`) to the
+      wrong row in a more complex reordering scenario. Not worth a
+      migration to add IDs unless a real symptom shows up.
+      Verified: all 31 tests pass, `npm run build` clean, dev server
+      compiles with no errors.
 - [ ] **Deploy `web/dist/` - see the dedicated section below, not started.**
 
 ## Polish pass over the PWA client (2026-08-23)
@@ -447,3 +462,23 @@ end-state.
       OIDC federation (short-lived, no long-lived keys sitting in repo
       secrets) once CI/CD is actually set up — the access-key user is a
       fine starting point, not the long-term answer for automated deploys.
+
+## Other useful work identified 2026-08-23 (not yet started, no AWS changes needed)
+
+Raised alongside the PWA hosting task as things worth doing that *don't*
+touch AWS - a session budget can go toward any of these without needing a
+deploy go-ahead first.
+
+- [x] **Edit existing vault entries** (2026-08-23) - see the "PWA kickoff
+      scaffold" section below for what shipped; was add/delete/view only
+      before this.
+- [ ] **Backend: wire up the Profile feature** - see the dedicated
+      "Profile feature" section below (`storageBytesUsed` never updated,
+      `plan` unused scaffolding, no `GET /profile` endpoint at all). Real
+      Java/Micronaut work, compiles/unit-tests locally without a deploy.
+- [ ] **Set up CI (GitHub Actions)** - nothing currently runs `mvn test` or
+      `web/`'s `npm test` automatically on push/PR; both are entirely
+      manual today. A workflow file is pure repo content, no AWS mutation
+      by itself. Natural prerequisite to the already-tracked "move CI/CD
+      onto GitHub Actions OIDC" item above (that one's about *how* CI
+      authenticates to deploy; this one is just "run the test suites").
