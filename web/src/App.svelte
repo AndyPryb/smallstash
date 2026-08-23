@@ -1,8 +1,10 @@
 <script>
+  import { onMount } from 'svelte';
   import LoginForm from './lib/components/LoginForm.svelte';
   import SignupForm from './lib/components/SignupForm.svelte';
+  import OfflineUnlockForm from './lib/components/OfflineUnlockForm.svelte';
   import VaultView from './lib/components/VaultView.svelte';
-  import { signInAndUnlock, clearSession } from './lib/session.js';
+  import { signInAndUnlock, unlockOffline, getLastAccount, clearSession } from './lib/session.js';
 
   /** @type {'login' | 'signup'} */
   let authMode = $state('login');
@@ -12,12 +14,66 @@
   let error = $state('');
   let loading = $state(false);
 
+  // navigator.onLine reflects the OS/browser's own view of connectivity -
+  // reliable for "definitely offline" (e.g. airplane mode), less reliable
+  // for "connected to wifi with no real internet" (captive portals etc.),
+  // which is what forceOffline (set from a failed login attempt below)
+  // covers instead.
+  let online = $state(navigator.onLine);
+  let forceOffline = $state(false);
+
+  let lastAccount = $state(getLastAccount());
+  let showOffline = $derived((!online || forceOffline) && lastAccount !== null);
+
+  onMount(() => {
+    const goOnline = () => {
+      online = true;
+    };
+    const goOffline = () => {
+      online = false;
+    };
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  });
+
+  /** @param {unknown} err */
+  function looksLikeNetworkFailure(err) {
+    // fetch() rejects with a TypeError (message varies by browser, e.g.
+    // "Failed to fetch" / "NetworkError when attempting to fetch resource")
+    // when it can't reach the network at all - as opposed to a real HTTP
+    // error response, which resolves normally and is handled elsewhere
+    // (ApiError, wrong-password errors, etc.).
+    return err instanceof TypeError || !navigator.onLine;
+  }
+
   /** @param {{ email: string, loginPassword: string, masterPassword: string }} detail */
   async function handleLogin(detail) {
     error = '';
     loading = true;
     try {
       vaultDocument = await signInAndUnlock(detail.email, detail.loginPassword, detail.masterPassword);
+      lastAccount = getLastAccount();
+    } catch (err) {
+      error = err.message ?? String(err);
+      if (looksLikeNetworkFailure(err) && getLastAccount()) {
+        lastAccount = getLastAccount();
+        forceOffline = true;
+      }
+    } finally {
+      loading = false;
+    }
+  }
+
+  /** @param {{ masterPassword: string }} detail */
+  async function handleOfflineUnlock(detail) {
+    error = '';
+    loading = true;
+    try {
+      vaultDocument = await unlockOffline(lastAccount.sub, detail.masterPassword);
     } catch (err) {
       error = err.message ?? String(err);
     } finally {
@@ -29,6 +85,7 @@
   function handleSignupComplete(detail) {
     error = '';
     vaultDocument = detail.vaultDocument;
+    lastAccount = getLastAccount();
     authMode = 'login';
   }
 
@@ -49,6 +106,18 @@
 
   {#if vaultDocument}
     <VaultView bind:vaultDocument onsignout={handleSignOut} />
+  {:else if showOffline}
+    <OfflineUnlockForm
+      email={lastAccount.email}
+      onunlock={handleOfflineUnlock}
+      ononline={() => (forceOffline = false)}
+      {loading}
+    />
+  {:else if !online}
+    <p class="error" role="alert">
+      You're offline, and this device has never signed in to smallStash before - connect to the internet to sign in
+      for the first time.
+    </p>
   {:else if authMode === 'signup'}
     <SignupForm oncomplete={handleSignupComplete} oncancel={() => (authMode = 'login')} />
   {:else}

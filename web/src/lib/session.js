@@ -32,6 +32,37 @@ import { config } from './config.js';
 let active = null;
 
 /**
+ * Remembers which account last signed in successfully on this device, so an
+ * offline unlock attempt knows *whose* cached key material to reach for
+ * without asking the user to somehow supply their Cognito sub. Email and sub
+ * are both non-secret (architecture.md §5 - sub is already the public
+ * DynamoDB PK / S3 key prefix), so localStorage is fine for this - nothing
+ * here is usable without the Master Password, same as the IndexedDB cache
+ * itself (see cache/db.js's header comment for the fuller version of this
+ * argument).
+ */
+const LAST_ACCOUNT_KEY = 'smallstash:lastAccount';
+
+function rememberAccount(email, sub) {
+  try {
+    localStorage.setItem(LAST_ACCOUNT_KEY, JSON.stringify({ email, sub }));
+  } catch {
+    // Private browsing / storage disabled - offline unlock just won't have
+    // an account to offer next time. Not fatal to the online flow.
+  }
+}
+
+/** @returns {{ email: string, sub: string } | null} the last account that signed in on this device */
+export function getLastAccount() {
+  try {
+    const raw = localStorage.getItem(LAST_ACCOUNT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Online path: sign in via Cognito SRP, fetch key material + vault from the
  * API, derive/unwrap, decrypt. Also refreshes the offline cache so a later
  * unlockOffline() has something current to work with.
@@ -211,6 +242,7 @@ async function authenticate(email, loginPassword) {
     password: loginPassword,
   });
   const sub = decodeSub(idToken);
+  rememberAccount(email, sub);
   return { idToken, sub };
 }
 

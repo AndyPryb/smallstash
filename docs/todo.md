@@ -127,11 +127,21 @@ reasoning (why this doesn't weaken zero-knowledge) and
 `web/src/lib/session.js`'s `unlockOffline()`/`refreshCacheIfStale()` for how
 it's wired into the actual unlock flow.
 
-- [ ] **Not yet wired into the UI** - `session.js` exposes the offline path,
-      but `App.svelte` currently only calls the online `signInAndUnlock()`.
-      Needs an explicit "you're offline, unlock from cache" affordance
-      (e.g. detect via `navigator.onLine` / a failed fetch) before offline
-      unlock is actually reachable by a user, not just by test code.
+- [x] **Wired into the UI** (2026-08-23) -
+      `web/src/lib/components/OfflineUnlockForm.svelte` + `App.svelte`.
+      Two triggers: the browser's own `online`/`offline` events
+      (`navigator.onLine`, reliable for "definitely offline" - airplane
+      mode etc.), and a manual fallback - a failed `signInAndUnlock()` that
+      looks network-related (fetch's `TypeError`, or `!navigator.onLine` at
+      the time) offers "try offline unlock instead", which covers the
+      "connected to wifi with no real internet" case `navigator.onLine`
+      alone misses. Session.js gained `getLastAccount()` (email/sub of the
+      last successful online sign-in on this device, in localStorage - both
+      non-secret, same reasoning as the IndexedDB cache) so the offline form
+      knows *whose* cache to unlock without asking the user to know their
+      own Cognito sub. Verified: build/tests clean; **not yet manually
+      tested with the browser's devtools "offline" network throttle** -
+      worth a real run-through.
 
 ## PWA kickoff scaffold - done, follow-on work still open (2026-08-23)
 
