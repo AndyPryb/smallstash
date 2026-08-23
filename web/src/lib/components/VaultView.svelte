@@ -1,6 +1,7 @@
 <script>
   import { saveVault } from '../session.js';
   import ChangeMasterPasswordForm from './ChangeMasterPasswordForm.svelte';
+  import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
@@ -8,12 +9,18 @@
   let saving = $state(false);
   let saveError = $state('');
   let showChangePassword = $state(false);
+  let showGenerator = $state(false);
 
   let title = $state('');
   let username = $state('');
   let password = $state('');
   let url = $state('');
   let notes = $state('');
+
+  function useGeneratedPassword(generated) {
+    password = generated;
+    showGenerator = false;
+  }
 
   function addEntry(event) {
     event.preventDefault();
@@ -72,7 +79,16 @@
     <h2>Add entry</h2>
     <label>Title <input bind:value={title} required /></label>
     <label>Username <input bind:value={username} /></label>
-    <label>Password <input type="password" bind:value={password} /></label>
+    <label>
+      Password
+      <span class="password-row">
+        <input type="password" bind:value={password} />
+        <button type="button" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
+      </span>
+    </label>
+    {#if showGenerator}
+      <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
+    {/if}
     <label>URL <input bind:value={url} /></label>
     <label>Notes <textarea bind:value={notes}></textarea></label>
     <button type="submit">Add entry</button>
@@ -119,6 +135,13 @@
   input,
   textarea {
     padding: 0.4rem;
+  }
+  .password-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .password-row input {
+    flex: 1;
   }
   .error {
     background: #3a1d1d;
