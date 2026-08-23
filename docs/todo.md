@@ -473,18 +473,40 @@ one place allowed to hold the live Vault Key) had zero coverage.
       the shipped browser bundle (verified: build output size unchanged,
       `fake-indexeddb` doesn't appear in it).
 
-**Found, not fixed - a real, larger gap flagged rather than attempted
-unprompted:** zero Svelte *component* tests exist (`App.svelte`, every form,
-`EntryListItem.svelte`, etc.) - only the `lib/` logic underneath them. The
-current test setup is plain `node:test` with no DOM at all; testing
-components would need new infrastructure (e.g. Vitest +
-`@testing-library/svelte` + jsdom/happy-dom, or Playwright component
-testing) - a deliberate decision to leave to a future session/explicit ask
-rather than bolt on a new test runner and DOM environment as a side effect
-of "improve coverage."
-
 Verified: all 79 tests pass (`npm test`), `npm run build` clean and
 unaffected by the new devDependencies.
+
+- [ ] **Add Svelte component tests** - found during the above review,
+      flagged rather than attempted unprompted (bolting on a second test
+      runner felt like a decision for you to make, not a side effect of
+      "improve coverage"). Zero component tests exist today - `App.svelte`,
+      every form (`LoginForm`/`SignupForm`/`ChangeMasterPasswordForm`/
+      `MfaCodeForm`/`OfflineUnlockForm`), `VaultView.svelte`,
+      `EntryListItem.svelte`, `PasswordGeneratorPanel.svelte` - only the
+      `lib/` logic underneath them is tested. The current setup (plain
+      `node:test`, no DOM at all) can't render a component, so this isn't a
+      "just add a file" gap - it needs new infrastructure first. Two real
+      options, worth deciding rather than defaulting to one:
+      - **Vitest + `@testing-library/svelte` + jsdom/happy-dom** - the more
+        common pairing for Svelte projects; tests run fast (no real
+        browser), interacts with the DOM via Testing Library's
+        query/fire-event API. Would mean running two test runners side by
+        side (`node:test` for `lib/`, Vitest for components) unless the
+        existing `lib/` tests are also migrated to Vitest at the same time
+        (itself a decision - Vitest is largely `node:test`/Jest-API-
+        compatible, so migration is plausible but not zero-effort, and
+        would mean giving up Node's built-in test runner in favor of an
+        added dependency).
+      - **Playwright component testing** - runs components in a real
+        browser engine (actual Chromium/Firefox/WebKit), closer to what a
+        user experiences (real CSS, real focus/keyboard behavior,
+        catches real-browser-only bugs jsdom can miss) but slower per test
+        and a heavier dependency.
+      Highest-value components to cover first, whichever tool is picked:
+      `EntryListItem.svelte` (view/edit/delete/mask-toggle state machine,
+      the most complex UI logic in the app) and `App.svelte`'s auth-mode
+      routing (login/signup/MFA/offline branches - currently only
+      exercised by hand).
 
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
 
