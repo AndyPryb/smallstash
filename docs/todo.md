@@ -194,10 +194,19 @@ cache/session layering described in the ADR.
       clean; **not yet manually run through in a browser** (in particular,
       `navigator.clipboard.writeText` behavior across browsers/contexts is
       worth checking by hand).
-- [ ] **MFA UI** - `web/src/lib/auth/cognito.js` handles the
-      `MfaRequiredError`/`submitMfaCode` case from Cognito, but `App.svelte`
-      doesn't catch or act on it yet - an MFA-enrolled user's login would
-      currently just show the raw error.
+- [x] **MFA UI** (2026-08-23) - `web/src/lib/components/MfaCodeForm.svelte` +
+      `App.svelte`. `session.js`'s `signInAndUnlock()` now catches
+      `MfaRequiredError` and stashes everything needed to resume the same
+      login attempt (the mid-flow `CognitoUser`, plus the already-entered
+      email and Master Password - `pendingMfa`, module-private) rather than
+      making the user re-enter passwords just to supply a code.
+      `completeMfaLogin(code)` finishes it; a wrong code leaves `pendingMfa`
+      intact so the user can just retry, only falling back to the login
+      form if something *after* a correct code fails (e.g. wrong Master
+      Password). Not tested against a real MFA-enrolled account (none
+      exists on the live pool yet - would need enrolling one by hand first)
+      - build/tests verified clean, but **the actual Cognito MFA
+      challenge/response round trip is unverified against a live pool.**
 - [ ] **Inactivity timeout** for the in-memory Master Key
       (architecture.md §5 says "cleared on tab close / inactivity timeout" -
       only tab-close-via-page-reload is currently true; no timer exists).
