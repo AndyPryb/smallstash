@@ -15,6 +15,7 @@
     confirmAccount,
     signUpAndInitializeVault,
   } from '../session.js';
+  import { validateMasterPassword, MIN_MASTER_PASSWORD_LENGTH } from '../policy.js';
 
   /** @type {{ oncomplete: (detail: { vaultDocument: object }) => void, oncancel: () => void }} */
   let { oncomplete, oncancel } = $props();
@@ -56,8 +57,9 @@
       error = 'Master Passwords do not match';
       return;
     }
-    if (!masterPassword) {
-      error = 'Master Password is required';
+    const masterPasswordError = validateMasterPassword(masterPassword);
+    if (masterPasswordError) {
+      error = masterPasswordError;
       return;
     }
     if (masterPassword === loginPassword) {
@@ -126,7 +128,7 @@
     <label>
       Master Password
       <input type="password" bind:value={masterPassword} autocomplete="off" required />
-      <small>Encrypts your vault. Never sent to the server - keep it different from your login password, and don't lose it (that's what the Recovery Key on the next screen is for).</small>
+      <small>Encrypts your vault. Never sent to the server - keep it different from your login password, and don't lose it (that's what the Recovery Key on the next screen is for). At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
     </label>
     <label>
       Confirm Master Password
