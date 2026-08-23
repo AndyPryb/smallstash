@@ -39,6 +39,66 @@ import { config } from './config.js';
 let active = null;
 
 /**
+ * Auto-lock: clears the in-memory Vault Key after a period of no user
+ * activity, per architecture.md §5 ("cleared on tab close / inactivity
+ * timeout"). Tab close already achieves this for free - `active` is a plain
+ * JS variable, so closing/reloading the tab destroys it along with
+ * everything else in memory. This is the other half: a *left open* tab.
+ *
+ * Lives here rather than as a raw timer in App.svelte so the "what counts as
+ * activity, how long is the timeout" policy stays in one place regardless of
+ * which UI component happens to be mounted - App.svelte's job is only to
+ * forward DOM activity events into resetInactivityTimer() and react to the
+ * onAutoLock callback by clearing whatever it's displaying.
+ */
+const DEFAULT_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+/** @type {ReturnType<typeof setTimeout> | null} */
+let inactivityTimer = null;
+
+/** @type {Set<() => void>} */
+const autoLockListeners = new Set();
+
+/**
+ * @param {() => void} listener called when the timer fires and the session
+ *   has just been cleared - typically used to drop whatever vault document
+ *   is currently on screen and show a "locked, sign in again" state.
+ * @returns {() => void} unsubscribe
+ */
+export function onAutoLock(listener) {
+  autoLockListeners.add(listener);
+  return () => autoLockListeners.delete(listener);
+}
+
+/**
+ * (Re)starts the inactivity countdown. Call on every detected user activity
+ * (mouse/keyboard/touch/scroll) - cheap no-op if there's no active session
+ * to protect, so callers don't need to check isUnlocked() themselves first.
+ * @param {number} [timeoutMs]
+ */
+export function resetInactivityTimer(timeoutMs = DEFAULT_INACTIVITY_TIMEOUT_MS) {
+  if (!active) return;
+  if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+  inactivityTimer = setTimeout(() => {
+    clearSession();
+    for (const listener of autoLockListeners) listener();
+  }, timeoutMs);
+}
+
+function stopInactivityTimer() {
+  if (inactivityTimer !== null) {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+}
+
+/** @param {string} sub @param {string | null} idToken @param {Uint8Array} vaultKey */
+function setActive(sub, idToken, vaultKey) {
+  active = { sub, idToken, vaultKey };
+  resetInactivityTimer();
+}
+
+/**
  * Remembers which account last signed in successfully on this device, so an
  * offline unlock attempt knows *whose* cached key material to reach for
  * without asking the user to somehow supply their Cognito sub. Email and sub
@@ -145,7 +205,7 @@ async function finishOnlineUnlock(idToken, sub, masterPassword) {
   const { ciphertextBase64, versionId } = await getVault(idToken);
   await cacheVault(sub, ciphertextBase64, versionId);
 
-  active = { sub, idToken, vaultKey };
+  setActive(sub, idToken, vaultKey);
   return decryptVault(vaultKey, ciphertextBase64);
 }
 
@@ -172,7 +232,7 @@ export async function unlockOffline(sub, masterPassword) {
   // active.idToken stays unset here (no network -> no fresh JWT); any write
   // attempt while in this state must re-authenticate first, not silently
   // fail against a stale/expired token.
-  active = { sub, idToken: null, vaultKey };
+  setActive(sub, null, vaultKey);
   return decryptVault(vaultKey, cachedVault.ciphertextBase64);
 }
 
@@ -198,7 +258,7 @@ export async function initializeVault(idToken, sub, masterPassword) {
   await cacheKeyMaterial(sub, userKeys);
   await cacheVault(sub, ciphertextBase64, versionId);
 
-  active = { sub, idToken, vaultKey };
+  setActive(sub, idToken, vaultKey);
   return { recoveryKey, vaultDocument };
 }
 
@@ -323,6 +383,12 @@ export async function refreshCacheIfStale(sub, idToken) {
 export function clearSession() {
   if (active) wipe(active.vaultKey);
   active = null;
+  stopInactivityTimer();
+}
+
+/** @returns {boolean} whether there is a currently-unlocked session */
+export function isUnlocked() {
+  return active !== null;
 }
 
 /** @returns {string | null} the current session's Cognito sub, or null if none */
