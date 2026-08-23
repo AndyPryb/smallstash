@@ -1,0 +1,14 @@
+{
+  "name": "smallstash-api-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated API tests for smallStash - real SRP auth via amazon-cognito-identity-js against the deployed stack. See docs/todo.md \"API testing approach\".",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test --test-isolation=none"
+  },
+  "dependencies": {
+    "amazon-cognito-identity-js": "^6.3.20",
+    "dotenv": "^17.4.2"
+  }
+}
