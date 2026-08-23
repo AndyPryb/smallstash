@@ -1,4 +1,8 @@
-import { signIn } from './auth/cognito.js';
+import {
+  signIn,
+  signUp as cognitoSignUp,
+  confirmSignUp as cognitoConfirmSignUp,
+} from './auth/cognito.js';
 import { getKeys, putKeys, getVault, putVault } from './api/client.js';
 import {
   createKeyMaterial,
@@ -88,20 +92,73 @@ export async function unlockOffline(sub, masterPassword) {
  * @param {string} idToken from a just-completed signIn/confirmSignUp
  * @param {string} sub
  * @param {string} masterPassword
- * @returns {Promise<{ recoveryKey: string }>}
+ * @returns {Promise<{ recoveryKey: string, vaultDocument: object }>}
  */
 export async function initializeVault(idToken, sub, masterPassword) {
   const { userKeys, vaultKey, recoveryKey } = await createKeyMaterial(masterPassword);
+  const vaultDocument = { entries: [] };
 
   await putKeys(idToken, userKeys);
-  const ciphertextBase64 = await encryptVault(vaultKey, { entries: [] });
+  const ciphertextBase64 = await encryptVault(vaultKey, vaultDocument);
   const { versionId } = await putVault(idToken, ciphertextBase64);
 
   await cacheKeyMaterial(sub, userKeys);
   await cacheVault(sub, ciphertextBase64, versionId);
 
   active = { sub, idToken, vaultKey };
-  return { recoveryKey };
+  return { recoveryKey, vaultDocument };
+}
+
+/**
+ * Step 1 of self-service signup: register the Cognito login identity. Real
+ * users go through this + confirmAccount, never admin-create-user (see
+ * docs/architecture.md §9's note on why the manual test user isn't the real
+ * flow). Cognito emails a verification code on success.
+ *
+ * @param {string} email
+ * @param {string} loginPassword Cognito login password - independent of the
+ *   Master Password, which isn't collected until step 3 (initializeVault)
+ */
+export function registerAccount(email, loginPassword) {
+  return cognitoSignUp({
+    userPoolId: config.userPoolId,
+    clientId: config.clientId,
+    email,
+    password: loginPassword,
+  });
+}
+
+/**
+ * Step 2: confirm the emailed verification code. The account is usable
+ * (can sign in) after this, but has no vault key material yet - the caller
+ * must follow up with signUpAndInitializeVault or the user will hit
+ * UserKeysNotFoundException on first login.
+ *
+ * @param {string} email
+ * @param {string} code
+ */
+export function confirmAccount(email, code) {
+  return cognitoConfirmSignUp({
+    userPoolId: config.userPoolId,
+    clientId: config.clientId,
+    email,
+    code,
+  });
+}
+
+/**
+ * Step 3: sign in to the just-confirmed account and mint its vault key
+ * material in one call - the natural continuation of the signup flow, so
+ * the UI doesn't need to juggle a raw idToken/sub between steps itself.
+ *
+ * @param {string} email
+ * @param {string} loginPassword
+ * @param {string} masterPassword
+ * @returns {Promise<{ recoveryKey: string, vaultDocument: object }>}
+ */
+export async function signUpAndInitializeVault(email, loginPassword, masterPassword) {
+  const { idToken, sub } = await authenticate(email, loginPassword);
+  return initializeVault(idToken, sub, masterPassword);
 }
 
 /**
