@@ -270,10 +270,13 @@ first introduced the affected code:
   login password (enforced server-side by Cognito's pool policy), the
   Master Password never reaches the backend, so the client is the only
   place anything can be checked. Added `web/src/lib/policy.js`
-  (`MIN_MASTER_PASSWORD_LENGTH = 8`), used by both `SignupForm.svelte` and
-  `ChangeMasterPasswordForm.svelte`. Deliberately looser than the login
-  policy (12+) so it doesn't read as "same rules, safe to reuse" and invite
-  conflating the two secrets.
+  (`MIN_MASTER_PASSWORD_LENGTH`), used by both `SignupForm.svelte` and
+  `ChangeMasterPasswordForm.svelte`. **Set to 4** (2026-08-23, explicit user
+  choice - deliberately allows a PIN-length Master Password) - flagged once
+  that this trades away real strength against offline brute-force if the
+  wrapped-key blob is ever exfiltrated (Argon2id raises cost-per-guess, it
+  doesn't rescue a 4-character search space), the user's call to make since
+  it's their own vault.
 - **Misleading doc comment on `cache/db.js`'s `clearCache()`** - said "call
   on explicit sign-out", which would have actively broken offline unlock the
   next time it was needed (the IndexedDB cache has to *survive* sign-out for
