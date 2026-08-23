@@ -59,6 +59,17 @@ public class SmallstashStack extends Stack {
     public SmallstashStack(final Construct scope, final String id, final StackProps props) {
         super(scope, id, props);
 
+        // Opt-in escape hatch for a genuine full teardown (dev/test convenience -
+        // docs/todo.md). Defaults to false = RETAIN (safe). Only takes effect
+        // after a `cdk deploy -c destroyData=true` (updates the deployed
+        // resources' DeletionPolicy in place) - THEN `cdk destroy` actually
+        // deletes them. CloudFormation deletes based on the deployed template's
+        // stored DeletionPolicy, not a fresh local synth, so `cdk destroy` alone
+        // (without deploying this flag first) still respects RETAIN regardless
+        // of what this code says. Never leave this true once real user data exists.
+        boolean destroyData = "true".equals(String.valueOf(this.getNode().tryGetContext("destroyData")));
+        RemovalPolicy dataRemovalPolicy = destroyData ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
+
         // ---------------------------------------------------------------
         // Storage (docs/decisions/0001-storage-s3-vs-dynamodb.md)
         // ---------------------------------------------------------------
@@ -66,24 +77,28 @@ public class SmallstashStack extends Stack {
         // Bucket name is CDK-generated (not hardcoded) - S3 names are globally
         // unique across all of AWS, so we let CDK pick one and pass it to the
         // Lambda via env var instead of risking a collision with a name we
-        // guessed. RETAIN: losing this bucket loses every user's vault -
-        // `cdk destroy` must never take it out from under you by accident.
+        // guessed. RETAIN by default: losing this bucket loses every user's
+        // vault - `cdk destroy` must never take it out from under you by
+        // accident. autoDeleteObjects only activates alongside DESTROY (S3
+        // won't delete a non-empty bucket otherwise; this must match
+        // dataRemovalPolicy or CDK refuses to synth).
         Bucket vaultBucket = Bucket.Builder.create(this, "VaultBucket")
                 .versioned(true)
                 .encryption(BucketEncryption.S3_MANAGED)
                 .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
-                .removalPolicy(RemovalPolicy.RETAIN)
+                .removalPolicy(dataRemovalPolicy)
+                .autoDeleteObjects(destroyData)
                 .build();
 
         // DynamoDB table names are only unique per account+region, so a fixed
-        // name is safe here. RETAIN for the same reason as the bucket - this
-        // is the KDF salt/wrapped-key metadata every login depends on.
+        // name is safe here. Same RETAIN-by-default reasoning as the bucket -
+        // this is the KDF salt/wrapped-key metadata every login depends on.
         Table usersTable = Table.Builder.create(this, "UsersTable")
                 .tableName("smallstash-users")
                 .partitionKey(Attribute.builder().name("pk").type(AttributeType.STRING).build())
                 .sortKey(Attribute.builder().name("sk").type(AttributeType.STRING).build())
                 .billingMode(BillingMode.PAY_PER_REQUEST)
-                .removalPolicy(RemovalPolicy.RETAIN)
+                .removalPolicy(dataRemovalPolicy)
                 .build();
 
         // ---------------------------------------------------------------
@@ -105,15 +120,22 @@ public class SmallstashStack extends Stack {
                         .requireDigits(true)
                         .requireSymbols(true)
                         .build())
-                .removalPolicy(RemovalPolicy.RETAIN)
+                .removalPolicy(dataRemovalPolicy)
                 .build();
 
-        // SRP only, deliberately no ALLOW_USER_PASSWORD_AUTH fallback - test
-        // via Cognito Hosted UI's OAuth2 flow instead (it does SRP internally).
+        // SRP only, no other auth flow - the production end state. Real
+        // clients (the PWA) test via Cognito Hosted UI's OAuth2 flow, which
+        // does SRP internally, not a shortcut around it. `.adminUserPassword(true)`
+        // was here temporarily for Postman-based manual testing (Postman can't
+        // do SRP's bignum math itself - see docs/architecture.md/todo.md for
+        // the full reasoning) - reverted now that the target is a
+        // production-ready PWA, not further Postman convenience.
         // generateSecret(false): this is a public client (browser PWA), it
         // can't keep a client secret confidential.
         UserPoolClient userPoolClient = userPool.addClient("WebClient", UserPoolClientOptions.builder()
-                .authFlows(AuthFlow.builder().userSrp(true).build())
+                .authFlows(AuthFlow.builder()
+                        .userSrp(true)
+                        .build())
                 .generateSecret(false)
                 .build());
 

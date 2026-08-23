@@ -31,6 +31,19 @@ one-line pointer.
    auto-wiring the Lambda security env vars) are tracked in
    [todo.md](todo.md) until the `infra/` CDK module actually lands.
 
+5. **Master Key session persistence** (re-litigated and reaffirmed
+   2026-08-23 - see architecture.md §5 for the fuller reasoning that led
+   here). **Status: Resolved — two independent secrets stays as-is**
+   (re-confirming #2), **plus memory-only Master Key caching for v1**:
+   keep the derived Master Key in a plain JS variable for the duration of
+   an active session (never written to localStorage/IndexedDB/any
+   persistent store), cleared on tab close / inactivity timeout. Nothing
+   to implement yet - no PWA project exists. A hardware-backed persistent
+   version (WebAuthn platform authenticator + PRF/largeBlob extension,
+   survives a full browser restart) is a legitimate future v2 - real
+   cross-browser support gaps and meaningfully more engineering, not
+   worth building before v1 ships and the friction is felt in practice.
+
 ## Lower urgency (don't block backend/storage work, decide when we get there)
 
 5. **Recovery key delivery format** — downloadable file, printable code,
