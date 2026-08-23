@@ -33,6 +33,18 @@
   let code = $state('');
   let recoveryKey = $state('');
   let recoveryKeySaved = $state(false);
+  let recoveryKeyCopied = $state(false);
+
+  async function copyRecoveryKey() {
+    try {
+      await navigator.clipboard.writeText(recoveryKey);
+      recoveryKeyCopied = true;
+      setTimeout(() => (recoveryKeyCopied = false), 2000);
+    } catch {
+      // Clipboard access denied/unavailable - the key is still fully
+      // readable and selectable on screen, nothing else to do here.
+    }
+  }
 
   // Client-side pre-check only, mirroring the Cognito pool's actual policy
   // (infra/.../SmallstashStack.java: minLength 12 + upper/lower/digit/symbol)
@@ -145,7 +157,7 @@
     <p>We emailed a verification code to <strong>{email}</strong>.</p>
     <label>
       Verification code
-      <input inputmode="numeric" bind:value={code} required />
+      <input inputmode="numeric" autocomplete="one-time-code" bind:value={code} required />
     </label>
     <div class="actions">
       <button type="submit" disabled={busy}>{busy ? 'Verifying…' : 'Verify and continue'}</button>
@@ -155,6 +167,9 @@
   <div class="recovery">
     <p><strong>Save this Recovery Key now.</strong> It's the only way back into your vault if you forget your Master Password - it is shown here once and never stored anywhere, by you or by smallStash.</p>
     <code class="recovery-key">{recoveryKey}</code>
+    <div class="actions">
+      <button type="button" onclick={copyRecoveryKey}>{recoveryKeyCopied ? 'Copied!' : 'Copy'}</button>
+    </div>
     <label class="confirm-saved">
       <input type="checkbox" bind:checked={recoveryKeySaved} />
       I've saved this Recovery Key somewhere safe
@@ -203,6 +218,7 @@
   }
   .recovery-key {
     display: block;
+    font-family: monospace;
     font-size: 1.1rem;
     letter-spacing: 0.05em;
     padding: 1rem;
