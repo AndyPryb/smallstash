@@ -197,12 +197,22 @@ auth-flow workaround that briefly existed to route around this was also
 reverted - back to SRP-only on the app client, the intended production
 end-state.
 
-- [ ] **Next: automated API tests in JavaScript/Node**, using the real
-      `amazon-cognito-identity-js` library for actual SRP authentication -
-      a real Node environment has full `BigInt` + npm package access that
-      Postman's sandbox lacks. Doubles as an early prototype of the PWA's
-      own auth code. Part of the next session's PWA kickoff, not started
-      yet.
+- [x] **Automated API tests in JavaScript/Node** (2026-08-23) - `tests/api/`,
+      using the real `amazon-cognito-identity-js` library for actual SRP
+      authentication - a real Node environment has full `BigInt` + npm
+      package access that Postman's sandbox lacks. Doubles as an early
+      prototype of the PWA's own auth code. 8/8 tests passing against the
+      live stack: unauthenticated 401s, `PUT`/`GET /keys` round-trip,
+      `PUT`/`GET /vault` round-trip, and `auth-flows.test.js` - which
+      confirms the deployed app client is SRP-only both by static config
+      (`DescribeUserPoolClient`) and at runtime (a public, non-admin
+      `USER_PASSWORD_AUTH` attempt is actually rejected, not just assumed
+      to be). That second file caught real drift: the live client still had
+      `ALLOW_ADMIN_USER_PASSWORD_AUTH` enabled from the earlier manual-testing
+      workaround even though the CDK source had already been reverted to
+      SRP-only - `cdk deploy -c destroyData=true` re-run to sync it, in-place
+      (no resource replacement, confirmed via `cdk diff` first - pool/client
+      IDs and API URL all unchanged, see "Live stack outputs" below).
 - [x] **Test config lives in `.env`/`.env.example` at the repo root**
       (2026-08-23) - `.env.example` is committed as a template only (all
       values blank, including the non-secret ones - deliberately not a
