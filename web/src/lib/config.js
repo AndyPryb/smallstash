@@ -1,20 +1,30 @@
 /**
- * Runtime config, from Vite env vars (import.meta.env). Values here are the
- * same public identifiers documented in docs/todo.md "Live stack outputs" -
- * pool ID, client ID, API URL are not secret (docs/architecture.md §5), so
- * baking them into the built bundle is fine. Never add anything secret to a
- * VITE_-prefixed var: Vite inlines every one of them into the shipped JS.
+ * Runtime config, read via import.meta.env.VITE_*. Values here are the same
+ * public identifiers documented in docs/todo.md "Live stack outputs" - pool
+ * ID, client ID, API URL are not secret (docs/architecture.md §5), so baking
+ * them into the built bundle is fine.
  *
- * vite.config.js sets envDir: '..', so these come from the repo-root .env -
- * the same file tests/api/ already reads, prefixed with VITE_.
+ * These names are NOT Vite's normal VITE_-prefixed convention picking them
+ * up automatically - vite.config.js reads the plain (unprefixed)
+ * AWS_REGION/COGNITO_USER_POOL_ID/COGNITO_CLIENT_ID/API_BASE_URL from the
+ * repo-root .env (the same file tests/api/ uses, no duplicate copy) and
+ * explicitly whitelists just those 4 into import.meta.env.VITE_* via
+ * `define`. That whitelist, not the VITE_ prefix, is what keeps everything
+ * else in .env (e.g. TEST_USER_PASSWORD) out of the shipped bundle - see
+ * vite.config.js for the actual list.
  */
 
-function required(name) {
-  const value = import.meta.env[name];
+// `import.meta.env.VITE_X` (static property access) is what vite.config.js's
+// `define` block can textually replace at build time - a dynamic/bracketed
+// lookup like `import.meta.env[name]` would NOT be replaced, and would
+// silently read undefined at runtime instead. Each getter below spells out
+// its own static access for exactly that reason - don't refactor this into
+// a name-driven loop.
+function required(value, name) {
   if (!value) {
     throw new Error(
       `Missing required env var ${name}. Copy .env.example to .env at the repo ` +
-        'root, fill it in, and add the VITE_-prefixed values (see web/README.md).',
+        'root and fill it in (see web/README.md).',
     );
   }
   return value;
@@ -22,15 +32,15 @@ function required(name) {
 
 export const config = {
   get region() {
-    return required('VITE_AWS_REGION');
+    return required(import.meta.env.VITE_AWS_REGION, 'AWS_REGION');
   },
   get userPoolId() {
-    return required('VITE_COGNITO_USER_POOL_ID');
+    return required(import.meta.env.VITE_COGNITO_USER_POOL_ID, 'COGNITO_USER_POOL_ID');
   },
   get clientId() {
-    return required('VITE_COGNITO_CLIENT_ID');
+    return required(import.meta.env.VITE_COGNITO_CLIENT_ID, 'COGNITO_CLIENT_ID');
   },
   get apiBaseUrl() {
-    return required('VITE_API_BASE_URL');
+    return required(import.meta.env.VITE_API_BASE_URL, 'API_BASE_URL');
   },
 };
