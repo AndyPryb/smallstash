@@ -4,36 +4,17 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
-## Built (infra/ CDK module - compiled + synthesized locally, NOT deployed)
+## What's built
 
-- [x] **SRP-only Cognito app client.** No `ALLOW_USER_PASSWORD_AUTH`
-      fallback — test via Hosted UI's OAuth2 flow instead (guide still
-      owed, see below).
-- [x] **TOTP MFA**, optional, on the Cognito user pool (login step only -
-      independent of the vault's own Argon2id/Master Password crypto).
-- [x] **CDK sets `MICRONAUT_SECURITY_ENABLED=true`, `COGNITO_JWKS_URL`,
-      `MICRONAUT_ENVIRONMENTS=lambda`, and the bucket/table names** as
-      Lambda env vars automatically, derived from the resources the same
-      stack creates — not a manually-remembered toggle. Still worth
-      eyeballing after the first real deploy (see checklist below).
-- [x] **HTTP API throttling** — explicit low limit (rate 10/s, burst 20) as
-      cheap worst-case-cost insurance given real usage is a handful of
-      requests every few days. AWS's much higher account-level default
-      throttle stays in place regardless; this is a deliberately tighter
-      one on top of it, not a replacement for anything.
-- [x] **CORS** — `HttpApi` CORS preflight configured, currently allowing
-      `http://localhost:5173` (placeholder) — **must be updated to the
-      real PWA origin once it has a domain**, before that matters for
-      real use.
-- [ ] **Dedicated IAM user for `aws configure`/CDK deploys** - script
-      provided in chat (CloudShell, run as root once). PowerUserAccess +
-      a custom policy scoping IAM role/policy management to
-      `smallstash-*`/`cdk-*` resource names (not blanket `AdministratorAccess`)
-      — genuinely tighter than "just use admin," but PowerUserAccess is
-      still broad by nature; revisit tightening further once the stack's
-      real resource set is stable. No console password/MFA on this user —
-      it's programmatic-only (CLI/CI), MFA doesn't fit a headless credential.
-      **You still need to actually run the script.**
+See [architecture.md §9/§9b](architecture.md#9-implementation-status) for
+the current, authoritative list of what's built vs. deployed — not
+duplicated here to avoid the two drifting out of sync. Short version: all
+backend code + the full CDK infra definition are written and locally
+verified; nothing is deployed to AWS yet.
+
+The deployer IAM user (`smallstash-deployer`) **is** created and is the
+active AWS CLI default profile — `infra/scripts/create-deployer-user.sh`
+already run. Its scoping caveat still applies, see "Guides owed" below.
 
 ## First-deploy checklist (don't forget, even though CDK should make this automatic)
 
@@ -41,8 +22,8 @@ of leaving them stale.
       asset points at `../target/smallstash-0.1.jar`, CDK does not build it
       for you, and `cdk deploy` will fail with `CannotFindAsset` if it's
       missing or stale.
-- [ ] Run the IAM deployer-user script (below) and `aws configure` with its
-      keys before the first `cdk bootstrap`/`cdk deploy`.
+- [x] Deployer IAM user created and set as the AWS CLI default profile
+      (`smallstash-deployer`, region `eu-west-1`) — done.
 - [ ] Confirm `MICRONAUT_SECURITY_ENABLED=true` actually landed on the
       deployed Lambda's env vars after the first `cdk deploy`.
 - [ ] Confirm `COGNITO_JWKS_URL` resolves and isn't the old unset/placeholder
