@@ -13,12 +13,14 @@ possibly grow into a small multi-user thing later — not enterprise.**
 Optimize for near-zero idle cost and low operational burden over
 scalability headroom we don't need yet.
 
-**Current status (2026-08-20):** backend code and the `infra/` CDK stack
-are both written and verified locally (compiles, tests written, CDK
-synthesizes cleanly) — **but nothing has been deployed to AWS.** No
-Cognito pool, bucket, table, Lambda, or API exists yet. See §9 for the
-full breakdown, [CLAUDE.md](../CLAUDE.md) for the always-current one-line
-version.
+**Current status (2026-08-23):** **first deploy is live.** `SmallstashStack`
+is deployed to account `<aws-account-id>`, region `eu-west-1` — Cognito pool,
+DynamoDB table, S3 bucket, Lambda, and HTTP API all exist and are
+verified working (JWT enforcement confirmed against the live API, not
+just the code). No PWA client yet, so there's nothing to click through
+end-to-end — see §9b for what was actually checked, [docs/todo.md](todo.md)
+for the live stack outputs, [CLAUDE.md](../CLAUDE.md) for the always-current
+one-line version.
 
 ---
 
@@ -177,6 +179,22 @@ becomes an observed problem.
 - **Optional TOTP MFA** on the Cognito login step — cheap, adds a layer
   independent of the vault's own crypto. Not required, user's choice at
   signup.
+- **Master Key session caching (PWA, v1): in-memory only, never
+  persisted.** The two-independent-secrets design means the Master
+  Password is re-typed every session by default (nothing to reuse is
+  ever stored) - real friction, re-litigated 2026-08-23 and deliberately
+  kept rather than merging the two secrets Bitwarden-style (same
+  password, two derivation paths). The friction fix instead: keep the
+  derived Master Key in a plain JS variable for the life of an active
+  session (cleared on tab close/inactivity timeout), never written to
+  localStorage/IndexedDB/anything persistent - storing it there would
+  turn a time-boxed-by-session secret into a standing one, undermining
+  a chunk of what "never stored" was buying. A hardware-backed version
+  that survives a full browser restart (WebAuthn platform authenticator
+  + PRF/largeBlob extension) is a real, legitimate pattern other password
+  managers use - deferred as v2, given inconsistent cross-browser support
+  and meaningfully more engineering than this is worth before the PWA
+  even exists.
 
 ## 6. Cost model (why this stays cheap)
 
@@ -296,7 +314,14 @@ Backend v1 storage + auth-scaffolding slice is built (this session):
   Desktop up before trusting them fully.
 - **Not built yet:** signup flow wiring `keys` write to a Cognito
   post-confirmation trigger vs. an explicit client call; the PWA client
-  itself (nothing to call these APIs from yet).
+  itself (nothing to call these APIs from yet). **A manual test user
+  exists** (`admin-create-user` + `admin-set-user-password`, 2026-08-23,
+  credentials in [todo.md](todo.md)) purely to exercise the deployed API
+  by hand — this is a stand-in, not the real flow. The PWA must use the
+  actual self-service `SignUp` API (email verification code, then
+  `ConfirmSignUp`), not admin-created users — admin-create bypasses email
+  verification entirely, which is fine for a one-off manual test account
+  and wrong for real users.
 
 ### 9b. Infra (`infra/` — CDK, Java) — defined and verified, NOT deployed
 
@@ -321,13 +346,20 @@ as code, every AWS resource this project needs:
   in place regardless), and CORS (currently allowing a `localhost:5173`
   placeholder origin — must be updated once the PWA has a real domain).
 
-**Verified:** compiles against real `aws-cdk-lib 2.252.0`; a full local
-synth (`mvn compile exec:java` from `infra/` — equivalent to `cdk synth`,
-no AWS calls) runs clean end to end.
+**Deployed (2026-08-23):** `cdk bootstrap` + `cdk deploy` both run
+(deployer always drives `deploy` themselves — the stack touches IAM, so
+`cdk deploy` shows its own native confirmation prompt). 21/21 resources,
+`CREATE_COMPLETE`. `infra/cdk.json`'s app command now runs
+`mvn -DskipTests package` on the backend before every synth, so the
+Lambda asset can't go stale/missing without a rebuild happening first —
+no more manually remembering to `mvn package` before deploying.
 
-**Not run, deliberately: `cdk bootstrap` / `cdk deploy`.** No AWS resource
-from this stack exists yet. See [todo.md](todo.md) "first-deploy
-checklist" before that ever happens.
+Post-deploy checklist from [todo.md](todo.md) fully verified against the
+live stack, not just asserted from the code: `MICRONAUT_SECURITY_ENABLED`
+and `COGNITO_JWKS_URL` landed correctly on the Lambda, an unauthenticated
+`GET /vault` returns 401 (not a leak, not a 500), DynamoDB/S3/Cognito all
+healthy. Live outputs (endpoint URL, pool ID, bucket name) are in
+[todo.md](todo.md).
 
 ## 10. Dependencies (Maven, current — from `pom.xml`)
 

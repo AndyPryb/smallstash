@@ -64,12 +64,16 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 - Backend (`vault`, `keys`, `security`, `error`, `config` packages):
   written, compiles clean, LocalStack integration tests written but not
   yet run end-to-end here (needs Docker, unavailable in this sandbox).
-- Infra (`infra/`): CDK stack fully defined (Cognito, DynamoDB, S3,
-  Lambda, HTTP API + JWT authorizer, throttling, CORS), compiles and
-  synthesizes cleanly. **`cdk bootstrap`/`cdk deploy` have never been
-  run** — no AWS resource from this project exists yet.
-- PWA client: **not started.** Everything above assumes it exists, but
-  only the backend it will talk to has been built so far.
+- Infra (`infra/`): **deployed and live** (2026-08-23) — Cognito, DynamoDB,
+  S3, Lambda, HTTP API + JWT authorizer, throttling, CORS all exist in
+  account `<aws-account-id>`, region `eu-west-1`. JWT enforcement verified
+  against the live API (unauthenticated request → 401), not just the
+  code. Live stack outputs (API URL, pool ID, bucket name) are in
+  [docs/todo.md](docs/todo.md). Redeploying: `cd infra && cdk deploy` —
+  the backend jar rebuilds automatically first, no manual `mvn package`
+  needed (`cdk.json`'s app command does it).
+- PWA client: **not started.** The backend is live and answers real HTTP
+  requests, but there's nothing to click through end-to-end yet.
 
 ## Where to look for what
 

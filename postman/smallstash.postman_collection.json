@@ -1,0 +1,255 @@
+{
+  "info": {
+    "_postman_id": "b6f2b8b0-2a1e-4c1a-9a3a-0f6e2c5d7e10",
+    "name": "smallStash API",
+    "description": "Manual/regression testing against the deployed smallStash HTTP API. See docs/architecture.md and docs/todo.md for the live stack details this collection targets.\n\n## Getting a token (SRP-only app client)\n\nThe real app client is SRP-only (see infra/SmallstashStack.java) - Postman can't do the SRP handshake itself. Instead, `ALLOW_ADMIN_USER_PASSWORD_AUTH` is enabled specifically for manual testing (admin-only flow, requires privileged AWS credentials - never exposed to the public client). Once that CDK change is deployed, mint a token with:\n\n```\naws cognito-idp admin-initiate-auth \\\n  --user-pool-id eu-west-1_<pool-id> \\\n  --client-id es8shgod8c4glft5nrn1hennc \\\n  --auth-flow ADMIN_USER_PASSWORD_AUTH \\\n  --auth-parameters USERNAME=test@example.com,PASSWORD='<TEST_USER_PASSWORD - do not commit, see your own local notes>' \\\n  --region eu-west-1\n```\n\nCopy the `AuthenticationResult.AccessToken` value from the response into this collection's `access_token` variable (or the paired environment file's variable). A collection-level pre-request script then reuses it automatically (checks the token's own `exp` claim, no re-fetch needed) for as long as it's valid - it only stops you and prints this same command again once the token's actually expired or missing, instead of blindly re-running it or blindly sending a stale one. See docs/todo.md for why this doesn't auto-fetch a fresh token by itself (would need AWS IAM credentials embedded in Postman - a bigger secret than the JWT itself).\n\n## What's in here\n\n- **Sanity checks**: confirms auth is actually enforced (no token -> 401), not just assumed.\n- **Keys**: GET/PUT /keys - the KDF salt/params + wrapped Vault Key metadata (DynamoDB).\n- **Vault**: GET/PUT /vault - the whole-vault ciphertext blob (S3).\n\nRequest bodies use placeholder base64 values, NOT real Argon2id/AES-GCM output - there's no PWA yet to produce real ciphertext. This collection tests the API/auth/storage plumbing, not the crypto.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Reuses the cached access_token if it's still valid (checked via the",
+          "// JWT's own `exp` claim, not a separately-tracked timestamp), otherwise",
+          "// halts the request with the exact command to run. Can't auto-mint a",
+          "// fresh token here: that needs admin-initiate-auth, which requires",
+          "// privileged AWS IAM credentials - Postman's sandbox has no safe way to",
+          "// hold those (a long-lived AWS key is a much bigger secret than a 1hr",
+          "// JWT). See docs/todo.md for the full reasoning and the fully-automated",
+          "// alternative (adding a public, non-admin auth flow) if you want it.",
+          "",
+          "function decodeJwtExp(jwt) {",
+          "    try {",
+          "        const payload = jwt.split('.')[1];",
+          "        const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));",
+          "        return JSON.parse(json).exp; // unix seconds",
+          "    } catch (e) {",
+          "        return null;",
+          "    }",
+          "}",
+          "",
+          "const SAFETY_MARGIN_SECONDS = 120; // treat as expired 2 min early, not right at the wire",
+          "const token = pm.environment.get('access_token') || pm.collectionVariables.get('access_token');",
+          "const nowSeconds = Math.floor(Date.now() / 1000);",
+          "const exp = token ? decodeJwtExp(token) : null;",
+          "",
+          "if (!token || !exp || (exp - SAFETY_MARGIN_SECONDS) <= nowSeconds) {",
+          "    const minsLeft = exp ? Math.round((exp - nowSeconds) / 60) : null;",
+          "    console.error(",
+          "        (!token ? 'No access_token set. ' : `access_token expired or expiring in ${minsLeft} min. `) +",
+          "        'Run this and paste AuthenticationResult.AccessToken into access_token:\\n\\n' +",
+          "        'aws cognito-idp admin-initiate-auth \\\\\\n' +",
+          "        '  --user-pool-id eu-west-1_<pool-id> \\\\\\n' +",
+          "        '  --client-id es8shgod8c4glft5nrn1hennc \\\\\\n' +",
+          "        '  --auth-flow ADMIN_USER_PASSWORD_AUTH \\\\\\n' +",
+          "        \"  --auth-parameters USERNAME=test@example.com,PASSWORD='<TEST_USER_PASSWORD - do not commit, see your own local notes>' \\\\\\n\" +",
+          "        '  --region eu-west-1'",
+          "    );",
+          "    throw new Error('access_token missing/expired - see the Postman console (View > Show Postman Console) for the exact command to run.');",
+          "} else {",
+          "    console.log(`access_token still valid for ~${Math.round((exp - nowSeconds) / 60)} more minutes - reusing, not re-fetching.`);",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Applies to every request in the collection unless overridden.",
+          "pm.test('response is JSON or empty (no HTML error page / stack trace leak)', function () {",
+          "    if (pm.response.text().length === 0) { return; }",
+          "    pm.response.to.be.json;",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "https://<api-id>.execute-api.eu-west-1.amazonaws.com", "type": "string" },
+    { "key": "access_token", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Sanity checks",
+      "item": [
+        {
+          "name": "GET /vault with no token -> 401",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/vault", "host": ["{{baseUrl}}"], "path": ["vault"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401, not a leak or 500', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test('body does not contain a stack trace or internal detail', function () {",
+                  "    pm.expect(pm.response.text()).to.not.include('Exception');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "GET /keys with no token -> 401",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/keys", "host": ["{{baseUrl}}"], "path": ["keys"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Keys",
+      "item": [
+        {
+          "name": "PUT /keys - create/replace key material",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kdfSalt\": \"c2FsdA==\",\n  \"kdfMemoryKib\": 19456,\n  \"kdfIterations\": 2,\n  \"kdfParallelism\": 1,\n  \"wrappedVaultKeyByMaster\": \"d3JhcHBlZC1ieS1tYXN0ZXI=\",\n  \"wrappedVaultKeyByRecovery\": \"d3JhcHBlZC1ieS1yZWNvdmVyeQ==\",\n  \"keyVersion\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/keys", "host": ["{{baseUrl}}"], "path": ["keys"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 204 No Content', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "GET /keys - read it back",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/keys", "host": ["{{baseUrl}}"], "path": ["keys"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('round-trips the same salt written above', function () {",
+                  "    pm.expect(pm.response.json().kdfSalt).to.eql('c2FsdA==');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "GET /keys - nonexistent user -> 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/keys", "host": ["{{baseUrl}}"], "path": ["keys"] },
+            "description": "Only returns 404 if the *authenticated* user has never written keys. With the test user above (which already PUT its keys), this will actually return 200 - this request is here as documentation of the expected behavior for a brand-new user, not something this collection can trigger without a second, keys-less test account."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Vault",
+      "item": [
+        {
+          "name": "PUT /vault - upload ciphertext blob",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ciphertextBase64\": \"bm90LXJlYWwtY2lwaGVydGV4dC1qdXN0LWJ5dGVz\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/vault", "host": ["{{baseUrl}}"], "path": ["vault"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('response includes an S3 version id', function () {",
+                  "    pm.expect(pm.response.json().versionId).to.not.be.empty;",
+                  "});",
+                  "pm.collectionVariables.set('last_vault_version_id', pm.response.json().versionId);"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "GET /vault - read it back",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/vault", "host": ["{{baseUrl}}"], "path": ["vault"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('round-trips the same ciphertext written above', function () {",
+                  "    pm.expect(pm.response.json().ciphertextBase64).to.eql('bm90LXJlYWwtY2lwaGVydGV4dC1qdXN0LWJ5dGVz');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": []
+        }
+      ]
+    }
+  ]
+}
