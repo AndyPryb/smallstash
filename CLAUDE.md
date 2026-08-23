@@ -79,7 +79,7 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 | Full system design, cost model, data model | [docs/architecture.md](docs/architecture.md) |
 | What's deliberately deferred and why (WAF, VPC, etc.) | [docs/todo.md](docs/todo.md) |
 | What's still undecided | [docs/open-questions.md](docs/open-questions.md) |
-| "Explain X again" (SRP, JWKS, ...) for the user, not code-relevant | [docs/learning-notes/](docs/learning-notes/) (gitignored) |
+| "Explain X again" (SRP, JWKS, ...) for the user, not code-relevant | [docs/learning-notes/README.md](docs/learning-notes/README.md) (gitignored) |
 
 ## Dev workflow cheat-sheet
 
