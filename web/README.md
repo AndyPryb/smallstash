@@ -15,12 +15,14 @@ cd web
 npm install
 ```
 
-Config comes from `.env` at the **repo root** (not this folder) — same file
-`tests/api/` uses. Copy `.env.example` there if you haven't already, and
-fill in the `VITE_`-prefixed values (pool/client/API IDs — see
-`docs/todo.md`'s "Live stack outputs", cross-check they're still current).
-Only ever put non-secret values behind a `VITE_` prefix — Vite inlines every
-one of them into the shipped JS bundle.
+Config comes from `.env` at the **repo root** (not this folder) — the exact
+same file and same four values (`AWS_REGION`/`COGNITO_USER_POOL_ID`/
+`COGNITO_CLIENT_ID`/`API_BASE_URL`) `tests/api/` already uses, no
+`VITE_`-prefixed duplicates needed. Copy `.env.example` there if you haven't
+already, and fill in those four (see `docs/todo.md`'s "Live stack outputs",
+cross-check they're still current). `vite.config.js` explicitly whitelists
+just those four names into the client bundle via `define` — everything else
+in `.env` (like `TEST_USER_PASSWORD`) never reaches shipped JS.
 
 ## Run
 

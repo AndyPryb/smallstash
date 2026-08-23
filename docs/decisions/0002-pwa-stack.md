@@ -70,13 +70,20 @@ Confirmed per the existing lean (open-questions.md #9). `web/` sits next to
 independent of the root Maven build, same pattern `infra/` already
 established as a sibling project in the same repo.
 
-`web/vite.config.js` sets `envDir: '..'` so it reads the same root `.env`
-`tests/api/` already uses, rather than a second copy. Vite inlines any
-`VITE_`-prefixed var into the shipped client bundle, so `.env`/`.env.example`
-now carry `VITE_AWS_REGION`/`VITE_COGNITO_USER_POOL_ID`/`VITE_COGNITO_CLIENT_ID`/
-`VITE_API_BASE_URL` duplicating the unprefixed test values — safe, since
-those four are already public (documented in `docs/todo.md`). Nothing secret
-(`TEST_USER_PASSWORD`) gets a `VITE_` prefix, ever.
+`web/vite.config.js` reads the same root `.env` `tests/api/` already uses —
+via `loadEnv()` with an empty prefix, not Vite's default `envDir` +
+`VITE_`-only convention, which would have meant hand-maintaining a second,
+`VITE_`-prefixed copy of every value (tried initially, reverted after it
+produced actual drift between the two copies within the same session — see
+git history). Instead, `vite.config.js`'s `define` block explicitly
+whitelists exactly `AWS_REGION`/`COGNITO_USER_POOL_ID`/`COGNITO_CLIENT_ID`/
+`API_BASE_URL` into `import.meta.env.VITE_*` at build time — one source of
+truth for those four values, shared with `tests/api/`, and everything else
+in `.env` (`TEST_USER_PASSWORD`) still can't reach the shipped bundle
+because it isn't on that whitelist. `web/src/lib/config.js` documents why
+each getter uses a static `import.meta.env.VITE_X` property access rather
+than a dynamic/name-driven lookup — the `define` replacement only matches
+the static form.
 
 ## Decision 4: Offline key material cache — yes, cache it in IndexedDB
 

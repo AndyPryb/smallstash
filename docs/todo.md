@@ -161,11 +161,45 @@ cache/session layering described in the ADR.
 - [ ] **Inactivity timeout** for the in-memory Master Key
       (architecture.md §5 says "cleared on tab close / inactivity timeout" -
       only tab-close-via-page-reload is currently true; no timer exists).
-- [ ] **Deploy the built `web/dist/` somewhere** - nothing serves it yet
-      (S3+CloudFront static hosting is the natural fit given the rest of the
-      stack, not yet in `infra/`). Also needed: update the CDK stack's CORS
-      origin once this has a real domain (currently only allows the Vite
-      dev-server placeholder, `localhost:5173`).
+- [ ] **Deploy `web/dist/` - see the dedicated section below, not started.**
+
+## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
+
+`npm run build` in `web/` produces a working static bundle (verified clean,
+~56 KB gzipped JS + service worker + manifest - see
+[ADR-0002](decisions/0002-pwa-stack.md)), but nothing in `infra/` serves it.
+Today the only way to run the PWA at all is `npm run dev` on a developer's
+own machine - there is no URL a real user (i.e. not-you) could open.
+
+- [ ] **Add S3 + CloudFront static hosting to the CDK stack** - the natural
+      fit given the rest of the stack is already CDK-managed: an S3 bucket
+      for the built `dist/` files, CloudFront in front of it (HTTPS,
+      caching, and a single distribution URL), `index.html` as both the
+      default root object and the error-document fallback (needed so
+      client-side routing - if any gets added later - doesn't 404 on
+      refresh). This is a **new CDK construct set**, not a reuse of the
+      existing `smallstash-vaults` bucket, which is versioned/RETAIN-tagged
+      secret ciphertext storage - hosting assets are public, disposable
+      build output and shouldn't share a bucket or removal policy with that.
+- [ ] **Update `SmallstashStack`'s HTTP API CORS origin** once a real
+      CloudFront domain exists - currently only allows the Vite dev-server
+      placeholder (`localhost:5173`), which is fine for local dev but wrong
+      for anything else calling the API.
+- [ ] **Decide a deploy step for `web/dist/` itself** - CDK can create the
+      bucket/distribution, but getting fresh build output *into* the bucket
+      on every change needs either a CDK `BucketDeployment` construct (asset
+      upload baked into `cdk deploy`, simplest, couples FE deploys to a CDK
+      deploy) or a separate CI step (`aws s3 sync` + a CloudFront
+      invalidation, decoupled but one more moving part to set up). No
+      decision yet - default to `BucketDeployment` unless a reason to split
+      shows up, consistent with "prefer CDK code changes over manual steps"
+      in CLAUDE.md.
+- [ ] **No custom domain yet** - CloudFront's own `*.cloudfront.net` URL is
+      fine to start; a real domain (Route 53 + ACM cert) is a separate,
+      later decision, not blocking a first working deploy.
+- [ ] **This is an AWS-account-mutating change once it reaches `cdk deploy`**
+      - needs the usual explicit go-ahead each time per CLAUDE.md, same as
+      every other stack change.
 
 ## Profile feature - not functionally wired up yet (2026-08-23)
 
