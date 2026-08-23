@@ -24,6 +24,7 @@ docs/learning-notes/
 # Never commit real secrets/credentials
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 **/application-local.properties

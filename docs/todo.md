@@ -203,6 +203,17 @@ end-state.
       Postman's sandbox lacks. Doubles as an early prototype of the PWA's
       own auth code. Part of the next session's PWA kickoff, not started
       yet.
+- [x] **Test config lives in `.env`/`.env.example` at the repo root**
+      (2026-08-23) - `.env.example` is committed as a template only (all
+      values blank, including the non-secret ones - deliberately not a
+      live mirror, so it can't drift when the stack gets recreated).
+      `.env` is gitignored and is the one file meant to hold real current
+      values, copied from docs/todo.md's "Live stack outputs".
+      `TEST_USER_PASSWORD` left blank for manual entry either way -
+      deliberately never written by an AI session, to avoid a secret
+      passing through chat/tool output again. Fill it in yourself before
+      running the test suite. Location may move once the
+      JS test suite's actual folder is decided (part of the PWA kickoff).
 - [ ] Cognito **Hosted UI** + OAuth2 flow is still worth setting up
       eventually for interactive/manual testing once the PWA exists - a
       separate, still-open item, not replaced by the automated tests above.
