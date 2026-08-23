@@ -1,11 +1,13 @@
 <script>
   import { saveVault } from '../session.js';
+  import ChangeMasterPasswordForm from './ChangeMasterPasswordForm.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
 
   let saving = $state(false);
   let saveError = $state('');
+  let showChangePassword = $state(false);
 
   let title = $state('');
   let username = $state('');
@@ -42,11 +44,16 @@
 <div>
   <div class="toolbar">
     <button onclick={persist} disabled={saving}>{saving ? 'Saving…' : 'Save vault'}</button>
+    <button onclick={() => (showChangePassword = !showChangePassword)}>Change Master Password</button>
     <button onclick={onsignout}>Sign out</button>
   </div>
 
   {#if saveError}
     <p class="error" role="alert">{saveError}</p>
+  {/if}
+
+  {#if showChangePassword}
+    <ChangeMasterPasswordForm onclose={() => (showChangePassword = false)} />
   {/if}
 
   <ul class="entries">

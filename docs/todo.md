@@ -166,10 +166,20 @@ cache/session layering described in the ADR.
       `admin-create-user` test user (see below) is no longer the *only* way
       to create an account, but is untouched/still valid for existing test
       scripts.
-- [ ] **Offline unlock affordance** - `session.js`'s offline path
-      (`unlockOffline`) has no UI trigger yet.
-- [ ] **Change Master Password UI** - `rewrapWithNewMasterPassword()` is
-      implemented and tested in `web/src/lib/crypto/vault.js`, has no UI yet.
+- [x] **Offline unlock affordance** (2026-08-23) - see the dedicated "PWA:
+      offline access to key material" section above for detail.
+- [x] **Change Master Password UI** (2026-08-23) -
+      `web/src/lib/components/ChangeMasterPasswordForm.svelte`, reachable
+      from a toolbar button in `VaultView.svelte`. Asks for the *current*
+      Master Password even though the session already holds the unwrapped
+      Vault Key in memory - `session.js`'s new `changeMasterPassword()`
+      re-derives from it and requires it to actually unwrap the stored key
+      before proceeding, so an unattended-but-unlocked tab can't have its
+      Master Password changed by whoever is sitting at it without knowing
+      the current one. Also requires the account's existing Recovery Key
+      (unchanged afterwards, just re-wrapped under a fresh salt - see
+      `rewrapWithNewMasterPassword()`'s existing tests). Verified:
+      build/tests clean; **not yet manually run through in a browser.**
 - [ ] **Password generator** (open question #6) - not started.
 - [ ] **MFA UI** - `web/src/lib/auth/cognito.js` handles the
       `MfaRequiredError`/`submitMfaCode` case from Cognito, but `App.svelte`
