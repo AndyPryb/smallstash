@@ -192,7 +192,9 @@ becomes an observed problem.
   kept rather than merging the two secrets Bitwarden-style (same
   password, two derivation paths). The friction fix instead: keep the
   derived Master Key in a plain JS variable for the life of an active
-  session (cleared on tab close/inactivity timeout), never written to
+  session (cleared on tab close/inactivity timeout - **both implemented**,
+  see `web/src/lib/session.js`'s `resetInactivityTimer`/`onAutoLock`, a
+  15-minute default), never written to
   localStorage/IndexedDB/anything persistent - storing it there would
   turn a time-boxed-by-session secret into a standing one, undermining
   a chunk of what "never stored" was buying. A hardware-backed version

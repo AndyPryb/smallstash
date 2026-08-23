@@ -207,9 +207,25 @@ cache/session layering described in the ADR.
       exists on the live pool yet - would need enrolling one by hand first)
       - build/tests verified clean, but **the actual Cognito MFA
       challenge/response round trip is unverified against a live pool.**
-- [ ] **Inactivity timeout** for the in-memory Master Key
-      (architecture.md §5 says "cleared on tab close / inactivity timeout" -
-      only tab-close-via-page-reload is currently true; no timer exists).
+- [x] **Inactivity timeout** (2026-08-23) - `session.js` gained a
+      15-minute (`DEFAULT_INACTIVITY_TIMEOUT_MS`) auto-lock timer:
+      `resetInactivityTimer()` (no-ops if there's no active session, so it's
+      cheap to call unconditionally), `onAutoLock(listener)`, and a private
+      `setActive()` helper so every path that unlocks a session
+      (`finishOnlineUnlock`/`unlockOffline`/`initializeVault`) starts the
+      timer the same way. `clearSession()` (already called by the timer
+      itself, sign-out, etc.) now also stops it. `App.svelte` forwards
+      throttled (every 3s, not every mousemove pixel) `mousemove`/
+      `keydown`/`mousedown`/`touchstart`/`scroll`/`wheel` activity into
+      `resetInactivityTimer()`, and reacts to the `onAutoLock` callback by
+      dropping the displayed vault and showing a "locked after inactivity,
+      sign in again" banner. Tab-close was already effectively true before
+      this (a plain JS variable dies with the page) - this is specifically
+      the "left the tab open" half of architecture.md §5's requirement.
+      Verified: build/tests clean; **not yet manually verified with the
+      timeout actually elapsing** (15 minutes of real wall-clock time is
+      impractical to sit through here - worth either a quick manual check
+      with a temporarily-shortened timeout, or trusting the code review).
 - [ ] **Deploy `web/dist/` - see the dedicated section below, not started.**
 
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
