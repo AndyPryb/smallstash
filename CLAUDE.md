@@ -47,6 +47,11 @@ pom.xml, src/            Micronaut backend (the Lambda) - Java 25, Maven
 infra/                   AWS CDK app (Java) - defines all AWS resources.
                          Independent Maven project; only references the
                          backend's build OUTPUT (the jar), not its source.
+web/                     PWA client (Svelte 5 + Vite, plain SPA - no
+                         SSR/SvelteKit, see docs/decisions/0002-pwa-stack.md).
+                         Own package.json, independent of the Maven builds.
+                         All Argon2id/AES-256-GCM crypto lives under
+                         web/src/lib/crypto/ - nowhere else, ever.
 docs/architecture.md     Living design doc - system diagram, data model,
                          cost model, phased roadmap. Source of truth.
 docs/decisions/          ADRs - the *why* behind non-obvious choices.
@@ -72,8 +77,14 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   [docs/todo.md](docs/todo.md). Redeploying: `cd infra && cdk deploy` —
   the backend jar rebuilds automatically first, no manual `mvn package`
   needed (`cdk.json`'s app command does it).
-- PWA client: **not started.** The backend is live and answers real HTTP
-  requests, but there's nothing to click through end-to-end yet.
+- PWA client (`web/`): **scaffolded 2026-08-23**, see
+  [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA; login
+  (Cognito SRP) + minimal vault CRUD work end-to-end against the live API.
+  `npm test` (22 tests, incl. Argon2id cross-checked against `@noble/hashes`
+  + an RFC 9106 vector) and `npm run build` both verified clean. Not yet
+  built: signup UI, password generator, offline-unlock UI, MFA UI, or any
+  hosting for the built output (no public URL yet) — see
+  [docs/todo.md](docs/todo.md) "PWA kickoff scaffold" for the full list.
 
 ## Where to look for what
 

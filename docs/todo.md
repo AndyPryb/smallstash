@@ -115,28 +115,57 @@ this project's own DynamoDB table + S3 bucket), the realistic "AWS
 account hijacked for crypto-mining" risk is reasonably well bounded for
 a personal project at this scale.
 
-## PWA: offline access to key material - open design gap (2026-08-23)
+## PWA: offline access to key material - resolved 2026-08-23
 
-`docs/architecture.md` says the PWA caches vault **ciphertext** in
-IndexedDB for offline use, but never addresses whether the `keys` data
-(salt, KDF params, wrapped Vault Key) is cached locally too. Without it,
-true offline unlock isn't possible: even with a cached vault blob,
-opening it requires `GET /keys` first, which needs network + a valid JWT
-- so "offline-capable" currently only half-works.
+**Status: implemented.** `web/src/lib/cache/db.js` caches salt, KDF params,
+and both wrapped Vault Key copies in IndexedDB alongside the vault
+ciphertext, keyed by Cognito `sub`. `isKeyMaterialStale()` compares cached
+vs. server `keyVersion` so a Master Password change elsewhere is detected
+once back online rather than silently unlocking against outdated wrapped
+keys. See [ADR-0002](decisions/0002-pwa-stack.md) decision 4 for the full
+reasoning (why this doesn't weaken zero-knowledge) and
+`web/src/lib/session.js`'s `unlockOffline()`/`refreshCacheIfStale()` for how
+it's wired into the actual unlock flow.
 
-- [ ] **Decide and implement: cache the wrapped key material locally too**
-      (e.g. IndexedDB, alongside the vault ciphertext), so the vault can
-      be unlocked with no network at all, not just re-read while offline.
-      Same security property either way - it's still wrapped/encrypted,
-      caching it locally doesn't expose anything caching it server-side
-      doesn't already. Needs the same "ciphertext only, never plaintext"
-      rule applied - cache `wrappedVaultKeyByMaster`/`wrappedVaultKeyByRecovery`/
-      salt/params, never the derived Master Key or unwrapped Vault Key.
-- [ ] **Staleness handling**: if the Master Password changes (new
-      `keyVersion`, per the earlier password-change discussion), a stale
-      cached wrapped key on another device needs to be detected and
-      refreshed once back online - use `keyVersion` to detect this rather
-      than silently using outdated cached key material.
+- [ ] **Not yet wired into the UI** - `session.js` exposes the offline path,
+      but `App.svelte` currently only calls the online `signInAndUnlock()`.
+      Needs an explicit "you're offline, unlock from cache" affordance
+      (e.g. detect via `navigator.onLine` / a failed fetch) before offline
+      unlock is actually reachable by a user, not just by test code.
+
+## PWA kickoff scaffold - done, follow-on work still open (2026-08-23)
+
+`web/` created per [ADR-0002](decisions/0002-pwa-stack.md) - Svelte 5 +
+Vite SPA, `hash-wasm` Argon2id (cross-checked against `@noble/hashes` +
+RFC 9106 in `web/src/lib/crypto/kdf.test.js`), monorepo layout. `npm test`
+(22 tests) and `npm run build` both verified passing/clean as of this
+commit. What exists: login form (Cognito SRP + Master Password unlock),
+minimal vault CRUD UI (add/remove entries, save), the full crypto/auth/
+cache/session layering described in the ADR.
+
+**Not yet built, in rough priority order:**
+- [ ] **Signup UI** - self-service `SignUp`/`ConfirmSignUp` (email
+      verification code) + first-run `initializeVault()` call (already
+      written in `session.js`, not wired to any UI) + the "write this
+      Recovery Key down now, it's shown once" screen. Today the only way
+      to create an account is still the manual `admin-create-user` test
+      user (see below).
+- [ ] **Offline unlock affordance** - see item directly above.
+- [ ] **Change Master Password UI** - `rewrapWithNewMasterPassword()` is
+      implemented and tested in `web/src/lib/crypto/vault.js`, has no UI yet.
+- [ ] **Password generator** (open question #6) - not started.
+- [ ] **MFA UI** - `web/src/lib/auth/cognito.js` handles the
+      `MfaRequiredError`/`submitMfaCode` case from Cognito, but `App.svelte`
+      doesn't catch or act on it yet - an MFA-enrolled user's login would
+      currently just show the raw error.
+- [ ] **Inactivity timeout** for the in-memory Master Key
+      (architecture.md §5 says "cleared on tab close / inactivity timeout" -
+      only tab-close-via-page-reload is currently true; no timer exists).
+- [ ] **Deploy the built `web/dist/` somewhere** - nothing serves it yet
+      (S3+CloudFront static hosting is the natural fit given the rest of the
+      stack, not yet in `infra/`). Also needed: update the CDK stack's CORS
+      origin once this has a real domain (currently only allows the Vite
+      dev-server placeholder, `localhost:5173`).
 
 ## Profile feature - not functionally wired up yet (2026-08-23)
 

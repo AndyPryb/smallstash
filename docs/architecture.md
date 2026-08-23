@@ -13,14 +13,20 @@ possibly grow into a small multi-user thing later — not enterprise.**
 Optimize for near-zero idle cost and low operational burden over
 scalability headroom we don't need yet.
 
-**Current status (2026-08-23):** **first deploy is live.** `SmallstashStack`
-is deployed to account `060795901917`, region `eu-west-1` — Cognito pool,
-DynamoDB table, S3 bucket, Lambda, and HTTP API all exist and are
-verified working (JWT enforcement confirmed against the live API, not
-just the code). No PWA client yet, so there's nothing to click through
-end-to-end — see §9b for what was actually checked, [docs/todo.md](todo.md)
-for the live stack outputs, [CLAUDE.md](../CLAUDE.md) for the always-current
-one-line version.
+**Current status (2026-08-23):** **first deploy is live**, and a **PWA
+client scaffold now exists** in `web/` (Svelte 5 + Vite, plain SPA — see
+[ADR-0002](decisions/0002-pwa-stack.md)). `SmallstashStack` is deployed to
+account `060795901917`, region `eu-west-1` — Cognito pool, DynamoDB table,
+S3 bucket, Lambda, and HTTP API all exist and are verified working (JWT
+enforcement confirmed against the live API, not just the code). The PWA can
+sign in via Cognito SRP, derive the Master Key (Argon2id via `hash-wasm`,
+cross-checked against `@noble/hashes` + an RFC 9106 vector), unwrap the
+Vault Key, and decrypt/edit/re-encrypt the vault against the live API — but
+nothing serves the built client yet (no CloudFront/S3 hosting in `infra/`),
+so there's no public URL to click through end-to-end. See §9b for what was
+checked on the infra side, [docs/todo.md](todo.md) for the live stack
+outputs and the PWA's remaining follow-on work, [CLAUDE.md](../CLAUDE.md)
+for the always-current one-line version.
 
 ---
 
@@ -256,9 +262,17 @@ how far that scoping actually goes.
 - S3 `smallstash-vaults` bucket for the whole-vault encrypted blob.
 - PWA client: KeePass-inspired fields (Title/Username/Password/URL/
   Notes/Tags), client-side Argon2id + AES-256-GCM, IndexedDB cache of
-  ciphertext only.
-- Recovery Key generated at signup (format: TBD, leaning BIP39-style word
-  phrase — open question #3).
+  ciphertext **and** wrapped key material (both, per
+  [ADR-0002](decisions/0002-pwa-stack.md) decision 4 — cache of
+  ciphertext-only was the original plan, revised once "offline unlock
+  needs the KEYS item too" was worked through). Scaffolded 2026-08-23 in
+  `web/` — login + minimal vault CRUD working against the live API;
+  signup UI, password generator, and offline-unlock UI still open, see
+  [docs/todo.md](todo.md).
+- Recovery Key generated at signup — **format decided for v1**: Crockford
+  Base32 grouped code (`web/src/lib/crypto/recovery.js`), not BIP39; see
+  [open-questions.md](open-questions.md) #5 for why and the freeze caveat
+  once real vaults exist.
 
 **v2+ (deferred, not designed yet):**
 - TOTP field support.
