@@ -178,6 +178,21 @@
   function handleSignOut() {
     clearSession();
     vaultDocument = null;
+    // Reset every transient flag rather than just vaultDocument - otherwise
+    // e.g. a forceOffline latched by an earlier network hiccup would strand
+    // the user on the offline-unlock screen after an explicit sign-out, even
+    // if they're back online and want to sign in as someone else.
+    cancelMfaLogin();
+    mfaPending = false;
+    forceOffline = false;
+    lockedByInactivity = false;
+    error = '';
+  }
+
+  /** @param {'login' | 'signup'} mode */
+  function switchAuthMode(mode) {
+    authMode = mode;
+    error = '';
   }
 </script>
 
@@ -211,11 +226,11 @@
       for the first time.
     </p>
   {:else if authMode === 'signup'}
-    <SignupForm oncomplete={handleSignupComplete} oncancel={() => (authMode = 'login')} />
+    <SignupForm oncomplete={handleSignupComplete} oncancel={() => switchAuthMode('login')} />
   {:else}
     <LoginForm onlogin={handleLogin} {loading} />
     <p class="switch-mode">
-      No account yet? <button type="button" onclick={() => (authMode = 'signup')}>Create one</button>
+      No account yet? <button type="button" onclick={() => switchAuthMode('signup')}>Create one</button>
     </p>
   {/if}
 </main>

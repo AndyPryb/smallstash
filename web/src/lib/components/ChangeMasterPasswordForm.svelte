@@ -1,5 +1,6 @@
 <script>
   import { changeMasterPassword } from '../session.js';
+  import { validateMasterPassword, MIN_MASTER_PASSWORD_LENGTH } from '../policy.js';
 
   /** @type {{ onclose: () => void }} */
   let { onclose } = $props();
@@ -21,8 +22,9 @@
       error = 'New Master Passwords do not match';
       return;
     }
-    if (!newMasterPassword) {
-      error = 'New Master Password is required';
+    const masterPasswordError = validateMasterPassword(newMasterPassword);
+    if (masterPasswordError) {
+      error = masterPasswordError;
       return;
     }
 
@@ -61,6 +63,7 @@
       <label>
         New Master Password
         <input type="password" bind:value={newMasterPassword} autocomplete="off" required />
+        <small>At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
       </label>
       <label>
         Confirm new Master Password

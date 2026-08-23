@@ -5,10 +5,6 @@ import {
   submitMfaCode,
   MfaRequiredError,
 } from './auth/cognito.js';
-
-// Re-exported so callers (App.svelte) only need to import from session.js,
-// not reach into auth/cognito.js directly for this one type check.
-export { MfaRequiredError };
 import { getKeys, putKeys, getVault, putVault } from './api/client.js';
 import {
   createKeyMaterial,
@@ -26,6 +22,10 @@ import {
   isKeyMaterialStale,
 } from './cache/db.js';
 import { config } from './config.js';
+
+// Re-exported so callers (App.svelte) only need to import from session.js,
+// not reach into auth/cognito.js directly for this one type check.
+export { MfaRequiredError };
 
 /**
  * Ties the pieces together: Cognito login -> fetch/cache key material ->
@@ -368,6 +368,15 @@ export async function changeMasterPassword(currentMasterPassword, newMasterPassw
  * Detects a stale offline cache after a Master Password change elsewhere
  * (docs/todo.md "Staleness handling") - call once back online, before
  * trusting a cached unlock.
+ *
+ * NOT currently called from anywhere in the UI - finishOnlineUnlock()
+ * already unconditionally overwrites the cache with the freshest KEYS item
+ * on every normal online sign-in, which covers the main "went stale, came
+ * back online, signed in again" case for free. This function is for a
+ * narrower gap that isn't wired up yet: proactively catching a Master
+ * Password change made on a *different* device while *this* device's
+ * session stays open the whole time, without a fresh re-login here to
+ * trigger the natural refresh above.
  * @param {string} sub
  */
 export async function refreshCacheIfStale(sub, idToken) {
@@ -389,6 +398,16 @@ export function clearSession() {
 /** @returns {boolean} whether there is a currently-unlocked session */
 export function isUnlocked() {
   return active !== null;
+}
+
+/**
+ * @returns {boolean} whether the current session was unlocked via
+ *   unlockOffline() rather than a real Cognito sign-in - no idToken means
+ *   saveVault() will reject, so UI can warn about this *before* an edit gets
+ *   made and lost, not just after saveVault() throws.
+ */
+export function isOfflineSession() {
+  return active !== null && active.idToken === null;
 }
 
 /** @returns {string | null} the current session's Cognito sub, or null if none */

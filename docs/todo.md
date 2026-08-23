@@ -240,6 +240,72 @@ cache/session layering described in the ADR.
       until now: worth its own future item if it's ever picked up.
 - [ ] **Deploy `web/dist/` - see the dedicated section below, not started.**
 
+## Polish pass over the PWA client (2026-08-23)
+
+Asked for a general review (not tied to a specific todo item) of everything
+in `web/` built so far. Found and fixed several real issues, none of them
+regressions from a specific commit - all present since whichever feature
+first introduced the affected code:
+
+- **Stale password mask on empty-password entries** - `EntryListItem.svelte`
+  showed a row of dots for entries with no password (a notes-only entry,
+  say), implying a hidden real password existed. Now shows `—` when there's
+  nothing to hide, and disables the "Show" button too.
+- **Broken links for scheme-less URLs** - an entry's `url` field (e.g. typed
+  as `example.com`, no `https://`) resolved as a relative link against the
+  app's own origin instead of navigating out - looked like a dead link.
+  `EntryListItem.svelte` now assumes `https://` when no scheme is present;
+  the visible link text still shows exactly what the user typed.
+- **Stale error banner across auth mode switches** - switching between
+  Login ⇄ Signup left a previous attempt's error message on screen,
+  potentially about the wrong action ("Incorrect Master Password" showing
+  over a fresh signup attempt). `App.svelte` now clears it on every mode
+  switch.
+- **Sign-out left stale UI flags set** - `forceOffline`/`mfaPending`/
+  `lockedByInactivity` weren't reset on sign-out; a `forceOffline` latched
+  by an earlier network hiccup could strand the next login attempt on the
+  offline-unlock screen even after an explicit, deliberate sign-out.
+  `handleSignOut()` now resets all of them.
+- **No minimum-length check on the Master Password anywhere** - unlike the
+  login password (enforced server-side by Cognito's pool policy), the
+  Master Password never reaches the backend, so the client is the only
+  place anything can be checked. Added `web/src/lib/policy.js`
+  (`MIN_MASTER_PASSWORD_LENGTH = 8`), used by both `SignupForm.svelte` and
+  `ChangeMasterPasswordForm.svelte`. Deliberately looser than the login
+  policy (12+) so it doesn't read as "same rules, safe to reuse" and invite
+  conflating the two secrets.
+- **Misleading doc comment on `cache/db.js`'s `clearCache()`** - said "call
+  on explicit sign-out", which would have actively broken offline unlock the
+  next time it was needed (the IndexedDB cache has to *survive* sign-out for
+  offline unlock to be useful at all - see the file's own header comment,
+  which already explained this correctly elsewhere). Comment corrected;
+  `clearCache()` remains unused, reserved for a possible future "forget this
+  device" action.
+- **`refreshCacheIfStale()` clarified as currently unused** - not a bug (the
+  normal online sign-in path already refreshes the cache unconditionally on
+  every login, which covers the main case), but the function existed with no
+  comment explaining that nothing calls it - could easily be mistaken for
+  active behavior by a future session. Added a comment describing the
+  narrower gap it would actually close if wired up (a Master Password change
+  on a *different* device while this one's session stays open throughout).
+- **New: offline-session banner in `VaultView.svelte`** - previously a user
+  unlocked offline would only discover saves don't sync when they clicked
+  "Save vault" and got an error. Added `session.js`'s `isOfflineSession()`
+  and a banner shown up front instead.
+
+**Known limitation surfaced, not fixed (real scope, not a polish-sized
+fix):** editing the vault while offline-unlocked, then reconnecting and
+signing in again normally (rather than clicking "Save vault" first), loses
+those edits with no warning beyond the new banner above - `signInAndUnlock()`
+fetches and displays the server's copy, with no merge/preservation of
+whatever was sitting unsaved in memory. Proper offline edit queuing/sync is
+flagged as v2+ in [ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md)
+("multi-device conflict resolution") - this is the same class of problem,
+not a new one, just newly visible now that offline unlock exists at all.
+
+All fixes verified: 31 tests pass, `npm run build` clean, dev server
+compiles every touched file with no errors.
+
 ## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
 
 `npm run build` in `web/` produces a working static bundle (verified clean,

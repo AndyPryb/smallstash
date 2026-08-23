@@ -23,6 +23,27 @@
       // works as a fallback way to read the password, nothing else to do here.
     }
   }
+
+  /**
+   * Entries can legitimately have no password (a notes-only entry, say) -
+   * masking an empty string still produced a row of dots that looked like a
+   * hidden real password. Only mask when there's actually something to hide.
+   */
+  function maskedPassword() {
+    if (!entry.password) return '—';
+    return showPassword ? entry.password : '•'.repeat(Math.max(entry.password.length, 8));
+  }
+
+  /**
+   * Entries.url is free-typed and commonly has no scheme (e.g. "example.com")
+   * - used as-is in an <a href>, that resolves as a *relative* link against
+   * this app's own origin instead of navigating out to the site, which looks
+   * like the link is just broken. Assume https if nothing more specific was
+   * given; the visible link text still shows exactly what the user typed.
+   */
+  function normalizedUrl(url) {
+    return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
+  }
 </script>
 
 <li>
@@ -43,15 +64,17 @@
 
       <div class="field">
         <span class="label">Password</span>
-        <span class="password">{showPassword ? entry.password || '—' : '•'.repeat(Math.max(entry.password?.length ?? 0, 8))}</span>
-        <button type="button" onclick={() => (showPassword = !showPassword)}>{showPassword ? 'Hide' : 'Show'}</button>
+        <span class="password">{maskedPassword()}</span>
+        <button type="button" onclick={() => (showPassword = !showPassword)} disabled={!entry.password}>
+          {showPassword ? 'Hide' : 'Show'}
+        </button>
         <button type="button" onclick={copyPassword} disabled={!entry.password}>{copied ? 'Copied!' : 'Copy'}</button>
       </div>
 
       <div class="field">
         <span class="label">URL</span>
         {#if entry.url}
-          <a href={entry.url} target="_blank" rel="noopener noreferrer">{entry.url}</a>
+          <a href={normalizedUrl(entry.url)} target="_blank" rel="noopener noreferrer">{entry.url}</a>
         {:else}
           <span>—</span>
         {/if}

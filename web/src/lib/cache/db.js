@@ -94,7 +94,16 @@ export function isKeyMaterialStale(cached, fromServer) {
   return !cached || cached.keyVersion !== fromServer.keyVersion;
 }
 
-/** Wipe everything cached for a user - call on explicit sign-out. */
+/**
+ * Wipe everything cached for a user.
+ *
+ * NOT called from sign-out - deliberately. Offline unlock only works because
+ * this cache survives across sign-outs (that's the whole point: sign out,
+ * close the browser, come back later with no network, still get in). Calling
+ * this on sign-out would quietly break offline unlock the very next time it
+ * was needed. Reserve this for a real "forget this device"/"wipe local data"
+ * action, if one is ever built - not currently wired into any UI.
+ */
 export async function clearCache(sub) {
   const database = await db();
   await database.delete(KEY_MATERIAL_STORE, sub);

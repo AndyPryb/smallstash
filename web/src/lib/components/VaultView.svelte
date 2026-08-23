@@ -1,11 +1,17 @@
 <script>
-  import { saveVault } from '../session.js';
+  import { saveVault, isOfflineSession } from '../session.js';
   import ChangeMasterPasswordForm from './ChangeMasterPasswordForm.svelte';
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
   import EntryListItem from './EntryListItem.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
+
+  // Fixed for this component's lifetime - a session doesn't transition from
+  // offline to online without a full new unlock, which tears down and
+  // recreates this component anyway (App.svelte only renders VaultView once
+  // vaultDocument is set). Plain constant, not reactive state, on purpose.
+  const offlineSession = isOfflineSession();
 
   let saving = $state(false);
   let saveError = $state('');
@@ -55,6 +61,14 @@
     <button onclick={() => (showChangePassword = !showChangePassword)}>Change Master Password</button>
     <button onclick={onsignout}>Sign out</button>
   </div>
+
+  {#if offlineSession}
+    <p class="notice">
+      You're viewing an offline copy - changes won't sync until you reconnect and sign in again. Signing back in
+      online will replace this view with the latest saved vault, so save anything important elsewhere first if you
+      can't reconnect right away.
+    </p>
+  {/if}
 
   {#if saveError}
     <p class="error" role="alert">{saveError}</p>
@@ -144,5 +158,14 @@
     border-radius: 6px;
     padding: 0.5rem 0.75rem;
     margin-bottom: 1rem;
+  }
+  .notice {
+    background: #3a2f0f;
+    color: #f0d68a;
+    border: 1px solid #6b5a2c;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
   }
 </style>
