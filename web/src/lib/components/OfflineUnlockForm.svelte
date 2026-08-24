@@ -9,6 +9,7 @@
    * the last successful online sign-in on this device (session.js's
    * getLastAccount()), so there's nothing else to ask for offline.
    */
+  import PasswordField from './PasswordField.svelte';
 
   /** @type {{ email: string, onunlock: (detail: { masterPassword: string }) => void, ononline: () => void, loading: boolean }} */
   let { email, onunlock, ononline, loading } = $props();
@@ -28,7 +29,7 @@
 
   <label>
     Master Password
-    <input type="password" bind:value={masterPassword} autocomplete="off" required />
+    <PasswordField bind:value={masterPassword} autocomplete="off" required />
   </label>
 
   <div class="actions">
@@ -50,10 +51,6 @@
     flex-direction: column;
     gap: 0.25rem;
     font-size: 0.9rem;
-  }
-  input {
-    padding: 0.5rem;
-    font-size: 1rem;
   }
   small {
     color: #888;

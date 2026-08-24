@@ -37,7 +37,7 @@ reaches `/config.json` or shipped JS — only those four names are read.
 npm run dev       # http://localhost:5173, live-reloads, talks to the real deployed API
 npm run build     # production build -> dist/ (static files, no server needed to host them)
 npm run preview   # serve the dist/ build locally, to sanity-check the built output
-npm test          # 84 tests, node's built-in test runner, no browser needed
+npm test          # 90 tests, node's built-in test runner, no browser needed
 ```
 
 `npm test` runs with `--experimental-test-module-mocks` (see `package.json`) -
@@ -102,10 +102,11 @@ src/lib/components/  Svelte UI components.
   the real (fake-indexeddb-backed) cache throughout; only the
   network-touching boundaries (`auth/cognito.js`, `api/client.js`,
   `config.js`) are replaced via `node:test`'s `mock.module()`. Covers the
-  full sign-in/MFA/offline-unlock/signup/save/change-Master-Password flows
-  (happy paths and the actual failure modes - wrong password, wrong MFA
-  code, offline write rejection, no active session) plus the inactivity
-  auto-lock timer (via `node:test`'s fake timers - no real 15-minute wait).
+  full sign-in/MFA/offline-unlock/signup/save/change-Master-Password/
+  change-login-password/login-password-reset flows (happy paths and the
+  actual failure modes - wrong password, wrong MFA code, offline write
+  rejection, no active session) plus the inactivity auto-lock timer (via
+  `node:test`'s fake timers - no real 15-minute wait).
 - `config.test.js` — the runtime `/config.json` fetch (see "Setup" above):
   throws if read before `loadConfig()` resolves, only fetches once, and
   rejects on a non-OK response or a response missing a required key. Mocks

@@ -13,7 +13,7 @@ async function bootstrap() {
     await loadConfig();
   } catch (err) {
     console.error('Failed to load app configuration:', err);
-    target.textContent = 'smallStash failed to load its configuration. Please try refreshing the page.';
+    target.textContent = 'Small Stash failed to load its configuration. Please try refreshing the page.';
     return;
   }
   mount(App, { target });

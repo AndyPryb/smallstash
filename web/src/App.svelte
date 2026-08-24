@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import LoginForm from './lib/components/LoginForm.svelte';
   import SignupForm from './lib/components/SignupForm.svelte';
+  import ForgotPasswordForm from './lib/components/ForgotPasswordForm.svelte';
   import OfflineUnlockForm from './lib/components/OfflineUnlockForm.svelte';
   import MfaCodeForm from './lib/components/MfaCodeForm.svelte';
   import VaultView from './lib/components/VaultView.svelte';
@@ -18,8 +19,9 @@
     MfaRequiredError,
   } from './lib/session.js';
 
-  /** @type {'login' | 'signup'} */
+  /** @type {'login' | 'signup' | 'forgot-password'} */
   let authMode = $state('login');
+  let notice = $state('');
 
   /** @type {object | null} */
   let vaultDocument = $state(null);
@@ -105,6 +107,7 @@
   /** @param {{ email: string, loginPassword: string, masterPassword: string }} detail */
   async function handleLogin(detail) {
     error = '';
+    notice = '';
     lockedByInactivity = false;
     loading = true;
     try {
@@ -187,18 +190,25 @@
     forceOffline = false;
     lockedByInactivity = false;
     error = '';
+    notice = '';
   }
 
-  /** @param {'login' | 'signup'} mode */
+  /** @param {'login' | 'signup' | 'forgot-password'} mode */
   function switchAuthMode(mode) {
     authMode = mode;
     error = '';
+    notice = '';
+  }
+
+  function handlePasswordResetComplete() {
+    authMode = 'login';
+    notice = 'Login password reset. Sign in with your new password.';
   }
 </script>
 
 <main>
   <header>
-    <h1>smallStash</h1>
+    <h1>Small Stash</h1>
   </header>
 
   {#if error}
@@ -207,6 +217,10 @@
 
   {#if lockedByInactivity && !vaultDocument}
     <p class="notice">Locked after a period of inactivity - sign in again to continue.</p>
+  {/if}
+
+  {#if notice && !vaultDocument}
+    <p class="notice">{notice}</p>
   {/if}
 
   {#if vaultDocument}
@@ -222,15 +236,21 @@
     />
   {:else if !online}
     <p class="error" role="alert">
-      You're offline, and this device has never signed in to smallStash before - connect to the internet to sign in
+      You're offline, and this device has never signed in to Small Stash before - connect to the internet to sign in
       for the first time.
     </p>
   {:else if authMode === 'signup'}
     <SignupForm oncomplete={handleSignupComplete} oncancel={() => switchAuthMode('login')} />
+  {:else if authMode === 'forgot-password'}
+    <ForgotPasswordForm oncomplete={handlePasswordResetComplete} oncancel={() => switchAuthMode('login')} />
   {:else}
     <LoginForm onlogin={handleLogin} {loading} />
     <p class="switch-mode">
       No account yet? <button type="button" onclick={() => switchAuthMode('signup')}>Create one</button>
+    </p>
+    <p class="switch-mode">
+      Forgot your login password?
+      <button type="button" onclick={() => switchAuthMode('forgot-password')}>Reset it</button>
     </p>
   {/if}
 </main>

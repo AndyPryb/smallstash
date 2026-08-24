@@ -16,6 +16,7 @@
     signUpAndInitializeVault,
   } from '../session.js';
   import { validateMasterPassword, MIN_MASTER_PASSWORD_LENGTH } from '../policy.js';
+  import PasswordField from './PasswordField.svelte';
 
   /** @type {{ oncomplete: (detail: { vaultDocument: object }) => void, oncancel: () => void }} */
   let { oncomplete, oncancel } = $props();
@@ -127,24 +128,24 @@
 
     <label>
       Login password
-      <input type="password" bind:value={loginPassword} autocomplete="new-password" required />
+      <PasswordField bind:value={loginPassword} autocomplete="new-password" required />
       <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
     </label>
     <label>
       Confirm login password
-      <input type="password" bind:value={confirmLoginPassword} autocomplete="new-password" required />
+      <PasswordField bind:value={confirmLoginPassword} autocomplete="new-password" required />
     </label>
 
     <hr />
 
     <label>
       Master Password
-      <input type="password" bind:value={masterPassword} autocomplete="off" required />
+      <PasswordField bind:value={masterPassword} autocomplete="off" required />
       <small>Encrypts your vault. Never sent to the server - keep it different from your login password, and don't lose it (that's what the Recovery Key on the next screen is for). At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
     </label>
     <label>
       Confirm Master Password
-      <input type="password" bind:value={confirmMasterPassword} autocomplete="off" required />
+      <PasswordField bind:value={confirmMasterPassword} autocomplete="off" required />
     </label>
 
     <div class="actions">
@@ -165,7 +166,7 @@
   </form>
 {:else if step === 'recovery'}
   <div class="recovery">
-    <p><strong>Save this Recovery Key now.</strong> It's the only way back into your vault if you forget your Master Password - it is shown here once and never stored anywhere, by you or by smallStash.</p>
+    <p><strong>Save this Recovery Key now.</strong> It's the only way back into your vault if you forget your Master Password - it is shown here once and never stored anywhere, by you or by Small Stash.</p>
     <code class="recovery-key">{recoveryKey}</code>
     <div class="actions">
       <button type="button" onclick={copyRecoveryKey}>{recoveryKeyCopied ? 'Copied!' : 'Copy'}</button>

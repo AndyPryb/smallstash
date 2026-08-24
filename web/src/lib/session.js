@@ -4,6 +4,9 @@ import {
   confirmSignUp as cognitoConfirmSignUp,
   submitMfaCode,
   MfaRequiredError,
+  forgotPassword as cognitoForgotPassword,
+  confirmForgotPassword as cognitoConfirmForgotPassword,
+  changePassword as cognitoChangePassword,
 } from './auth/cognito.js';
 import { getKeys, putKeys, getVault, putVault } from './api/client.js';
 import {
@@ -35,7 +38,7 @@ export { MfaRequiredError };
  * (docs/architecture.md §5 "Master Key session caching").
  */
 
-/** @type {{ sub: string, idToken: string, vaultKey: Uint8Array } | null} */
+/** @type {{ sub: string, idToken: string, vaultKey: Uint8Array, cognitoUser: import('amazon-cognito-identity-js').CognitoUser | null } | null} */
 let active = null;
 
 /**
@@ -92,9 +95,14 @@ function stopInactivityTimer() {
   }
 }
 
-/** @param {string} sub @param {string | null} idToken @param {Uint8Array} vaultKey */
-function setActive(sub, idToken, vaultKey) {
-  active = { sub, idToken, vaultKey };
+/**
+ * @param {string} sub @param {string | null} idToken @param {Uint8Array} vaultKey
+ * @param {import('amazon-cognito-identity-js').CognitoUser | null} [cognitoUser]
+ *   null for an offline unlock (no Cognito session at all) - see
+ *   changeLoginPassword, the one thing that needs this.
+ */
+function setActive(sub, idToken, vaultKey, cognitoUser = null) {
+  active = { sub, idToken, vaultKey, cognitoUser };
   resetInactivityTimer();
 }
 
@@ -153,16 +161,16 @@ let pendingMfa = null;
  *   specifically, prompt for a code, then call completeMfaLogin(code)
  */
 export async function signInAndUnlock(email, loginPassword, masterPassword) {
-  let idToken, sub;
+  let idToken, sub, cognitoUser;
   try {
-    ({ idToken, sub } = await authenticate(email, loginPassword));
+    ({ idToken, sub, cognitoUser } = await authenticate(email, loginPassword));
   } catch (err) {
     if (err instanceof MfaRequiredError) {
       pendingMfa = { cognitoUser: err.cognitoUser, email, masterPassword };
     }
     throw err;
   }
-  return finishOnlineUnlock(idToken, sub, masterPassword);
+  return finishOnlineUnlock(idToken, sub, masterPassword, cognitoUser);
 }
 
 /**
@@ -176,14 +184,14 @@ export async function completeMfaLogin(code) {
   if (!pendingMfa) throw new Error('No sign-in is currently waiting on an MFA code');
   const { cognitoUser, email, masterPassword } = pendingMfa;
 
-  const { idToken } = await submitMfaCode(cognitoUser, code);
+  const { idToken, cognitoUser: authedCognitoUser } = await submitMfaCode(cognitoUser, code);
   // Only cleared on success - a wrong code should be retryable without
   // forcing the user back through email/login password/Master Password.
   pendingMfa = null;
 
   const sub = decodeSub(idToken);
   rememberAccount(email, sub);
-  return finishOnlineUnlock(idToken, sub, masterPassword);
+  return finishOnlineUnlock(idToken, sub, masterPassword, authedCognitoUser);
 }
 
 /** Abandon a pending MFA login (e.g. user clicks "cancel" on the code prompt). */
@@ -196,7 +204,7 @@ export function isMfaPending() {
   return pendingMfa !== null;
 }
 
-async function finishOnlineUnlock(idToken, sub, masterPassword) {
+async function finishOnlineUnlock(idToken, sub, masterPassword, cognitoUser) {
   const userKeys = await getKeys(idToken);
   await cacheKeyMaterial(sub, userKeys);
 
@@ -205,7 +213,7 @@ async function finishOnlineUnlock(idToken, sub, masterPassword) {
   const { ciphertextBase64, versionId } = await getVault(idToken);
   await cacheVault(sub, ciphertextBase64, versionId);
 
-  setActive(sub, idToken, vaultKey);
+  setActive(sub, idToken, vaultKey, cognitoUser);
   return decryptVault(vaultKey, ciphertextBase64);
 }
 
@@ -245,9 +253,10 @@ export async function unlockOffline(sub, masterPassword) {
  * @param {string} idToken from a just-completed signIn/confirmSignUp
  * @param {string} sub
  * @param {string} masterPassword
+ * @param {import('amazon-cognito-identity-js').CognitoUser | null} [cognitoUser]
  * @returns {Promise<{ recoveryKey: string, vaultDocument: object }>}
  */
-export async function initializeVault(idToken, sub, masterPassword) {
+export async function initializeVault(idToken, sub, masterPassword, cognitoUser = null) {
   const { userKeys, vaultKey, recoveryKey } = await createKeyMaterial(masterPassword);
   const vaultDocument = { entries: [] };
 
@@ -258,7 +267,7 @@ export async function initializeVault(idToken, sub, masterPassword) {
   await cacheKeyMaterial(sub, userKeys);
   await cacheVault(sub, ciphertextBase64, versionId);
 
-  setActive(sub, idToken, vaultKey);
+  setActive(sub, idToken, vaultKey, cognitoUser);
   return { recoveryKey, vaultDocument };
 }
 
@@ -310,8 +319,8 @@ export function confirmAccount(email, code) {
  * @returns {Promise<{ recoveryKey: string, vaultDocument: object }>}
  */
 export async function signUpAndInitializeVault(email, loginPassword, masterPassword) {
-  const { idToken, sub } = await authenticate(email, loginPassword);
-  return initializeVault(idToken, sub, masterPassword);
+  const { idToken, sub, cognitoUser } = await authenticate(email, loginPassword);
+  return initializeVault(idToken, sub, masterPassword, cognitoUser);
 }
 
 /**
@@ -362,6 +371,59 @@ export async function changeMasterPassword(currentMasterPassword, newMasterPassw
   });
   await putKeys(active.idToken, newUserKeys);
   await cacheKeyMaterial(active.sub, newUserKeys);
+}
+
+/**
+ * Change the Cognito *login* password - the account sign-in password, kept
+ * deliberately independent from the vault Master Password (see
+ * changeMasterPassword above, architecture.md §5). Requires an online
+ * session: Cognito's ChangePassword API needs the CognitoUser instance
+ * retained since sign-in (never persisted - same module-level-only
+ * lifetime as everything else in `active`), not just the current password.
+ *
+ * @param {string} currentLoginPassword
+ * @param {string} newLoginPassword
+ */
+export async function changeLoginPassword(currentLoginPassword, newLoginPassword) {
+  if (!active) throw new Error('No active session');
+  if (!active.cognitoUser) {
+    throw new Error('Cannot change login password while offline - reconnect and sign in again');
+  }
+  await cognitoChangePassword(active.cognitoUser, currentLoginPassword, newLoginPassword);
+}
+
+/**
+ * Step 1 of the Cognito login-password recovery flow ("forgot password") -
+ * for a user who is signed out and doesn't remember their login password.
+ * Distinct from the vault's Recovery Key, which recovers the Master
+ * Password instead (architecture.md §5) - this never touches vault crypto.
+ * No active session needed. Cognito emails a verification code; follow up
+ * with confirmLoginPasswordReset.
+ *
+ * @param {string} email
+ */
+export function requestLoginPasswordReset(email) {
+  return cognitoForgotPassword({ userPoolId: config.userPoolId, clientId: config.clientId, email });
+}
+
+/**
+ * Step 2: complete the reset with the emailed code and a new login
+ * password. The account's vault key material is untouched by this - the
+ * login password and the wrapped Vault Key are independent secrets, so
+ * resetting one never requires re-deriving or re-wrapping the other.
+ *
+ * @param {string} email
+ * @param {string} code the emailed verification code
+ * @param {string} newLoginPassword
+ */
+export function confirmLoginPasswordReset(email, code, newLoginPassword) {
+  return cognitoConfirmForgotPassword({
+    userPoolId: config.userPoolId,
+    clientId: config.clientId,
+    email,
+    code,
+    newPassword: newLoginPassword,
+  });
 }
 
 /**
@@ -416,7 +478,7 @@ export function currentSub() {
 }
 
 async function authenticate(email, loginPassword) {
-  const { idToken } = await signIn({
+  const { idToken, cognitoUser } = await signIn({
     userPoolId: config.userPoolId,
     clientId: config.clientId,
     email,
@@ -424,7 +486,7 @@ async function authenticate(email, loginPassword) {
   });
   const sub = decodeSub(idToken);
   rememberAccount(email, sub);
-  return { idToken, sub };
+  return { idToken, sub, cognitoUser };
 }
 
 /** Cognito ID tokens are JWTs; `sub` is a standard claim in the payload. */

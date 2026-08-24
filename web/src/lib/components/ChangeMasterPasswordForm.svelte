@@ -1,6 +1,7 @@
 <script>
   import { changeMasterPassword } from '../session.js';
   import { validateMasterPassword, MIN_MASTER_PASSWORD_LENGTH } from '../policy.js';
+  import PasswordField from './PasswordField.svelte';
 
   /** @type {{ onclose: () => void }} */
   let { onclose } = $props();
@@ -55,19 +56,19 @@
     <form onsubmit={submit}>
       <label>
         Current Master Password
-        <input type="password" bind:value={currentMasterPassword} autocomplete="off" required />
+        <PasswordField bind:value={currentMasterPassword} autocomplete="off" required />
       </label>
 
       <hr />
 
       <label>
         New Master Password
-        <input type="password" bind:value={newMasterPassword} autocomplete="off" required />
+        <PasswordField bind:value={newMasterPassword} autocomplete="off" required />
         <small>At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
       </label>
       <label>
         Confirm new Master Password
-        <input type="password" bind:value={confirmNewMasterPassword} autocomplete="off" required />
+        <PasswordField bind:value={confirmNewMasterPassword} autocomplete="off" required />
       </label>
 
       <label>
