@@ -25,6 +25,12 @@ import software.amazon.awscdk.services.cognito.SignInAliases;
 import software.amazon.awscdk.services.cognito.UserPool;
 import software.amazon.awscdk.services.cognito.UserPoolClient;
 import software.amazon.awscdk.services.cognito.UserPoolClientOptions;
+import software.amazon.awscdk.services.cloudfront.BehaviorOptions;
+import software.amazon.awscdk.services.cloudfront.Distribution;
+import software.amazon.awscdk.services.cloudfront.ErrorResponse;
+import software.amazon.awscdk.services.cloudfront.PriceClass;
+import software.amazon.awscdk.services.cloudfront.ViewerProtocolPolicy;
+import software.amazon.awscdk.services.cloudfront.origins.S3BucketOrigin;
 import software.amazon.awscdk.services.dynamodb.Attribute;
 import software.amazon.awscdk.services.dynamodb.AttributeType;
 import software.amazon.awscdk.services.dynamodb.BillingMode;
@@ -35,6 +41,8 @@ import software.amazon.awscdk.services.lambda.Runtime;
 import software.amazon.awscdk.services.s3.BlockPublicAccess;
 import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.BucketEncryption;
+import software.amazon.awscdk.services.s3.deployment.BucketDeployment;
+import software.amazon.awscdk.services.s3.deployment.Source;
 import software.constructs.Construct;
 
 import java.util.List;
@@ -163,6 +171,64 @@ public class SmallstashStack extends Stack {
         usersTable.grantReadWriteData(backend);
 
         // ---------------------------------------------------------------
+        // PWA hosting (web/dist -> S3, fronted by CloudFront)
+        //
+        // Bucket holds only the built static site (HTML/JS/CSS/wasm) - not
+        // user data, so unlike VaultBucket/UsersTable above this is always
+        // DESTROY/auto-delete regardless of the destroyData flag: losing it
+        // loses nothing but a `npm run build` + redeploy. Fully private
+        // (BLOCK_ALL) - CloudFront reaches it via Origin Access Control
+        // (OAC), never a public bucket policy.
+        Bucket siteBucket = Bucket.Builder.create(this, "SiteBucket")
+                .encryption(BucketEncryption.S3_MANAGED)
+                .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
+                .removalPolicy(RemovalPolicy.DESTROY)
+                .autoDeleteObjects(true)
+                .build();
+
+        // SPA routing fix: client-side routes like /vault/entry/42 have no
+        // matching S3 key, so a refresh on one 403s (bucket is private, no
+        // "key doesn't exist" distinction reaches CloudFront as 404) -
+        // rewrite both 403 and 404 to /index.html so the app's own router
+        // handles the path instead of the user seeing a raw S3 error.
+        Distribution distribution = Distribution.Builder.create(this, "SiteDistribution")
+                .defaultBehavior(BehaviorOptions.builder()
+                        .origin(S3BucketOrigin.withOriginAccessControl(siteBucket))
+                        .viewerProtocolPolicy(ViewerProtocolPolicy.REDIRECT_TO_HTTPS)
+                        .build())
+                .defaultRootObject("index.html")
+                .errorResponses(List.of(
+                        ErrorResponse.builder()
+                                .httpStatus(403)
+                                .responseHttpStatus(200)
+                                .responsePagePath("/index.html")
+                                .build(),
+                        ErrorResponse.builder()
+                                .httpStatus(404)
+                                .responseHttpStatus(200)
+                                .responsePagePath("/index.html")
+                                .build()))
+                // Cheapest tier (US/Canada/Europe edge locations only) - fine
+                // for a ~20-user personal app, see docs/architecture.md cost
+                // model. PRICE_CLASS_ALL would add edge locations nobody here
+                // is close to, for extra cost.
+                .priceClass(PriceClass.PRICE_CLASS_100)
+                .build();
+
+        // Uploads web/dist on every `cdk deploy` and invalidates the
+        // CloudFront cache so the new build is visible immediately (no
+        // waiting out the default TTL). Needs `npm run build` (in web/) run
+        // first, same as the backend jar needs `mvn package` first - CDK
+        // does not build either for you and fails with an asset-not-found
+        // error on a stale/missing web/dist.
+        BucketDeployment.Builder.create(this, "SiteDeployment")
+                .sources(List.of(Source.asset("../web/dist")))
+                .destinationBucket(siteBucket)
+                .distribution(distribution)
+                .distributionPaths(List.of("/*"))
+                .build();
+
+        // ---------------------------------------------------------------
         // HTTP API (docs/architecture.md sec 2) - native Cognito JWT
         // authorizer in front, so an invalid/expired token never even
         // reaches the Lambda. micronaut-security-jwt re-checks it in-Lambda
@@ -180,10 +246,15 @@ public class SmallstashStack extends Stack {
                 .apiName("smallstash-api")
                 .createDefaultStage(false)
                 .defaultAuthorizer(authorizer)
-                // TODO: replace with the real PWA origin once it has a domain -
-                // see docs/todo.md. localhost:5173 is a Vite-style local dev default.
+                // Real PWA origin (this CloudFront distribution) plus
+                // localhost:5173 for local `npm run dev`. The distribution's
+                // domain name is a CloudFormation token resolved at deploy
+                // time within this same stack, so no manual step is needed
+                // once a real custom domain replaces it (see docs/todo.md).
                 .corsPreflight(CorsPreflightOptions.builder()
-                        .allowOrigins(List.of("http://localhost:5173"))
+                        .allowOrigins(List.of(
+                                "http://localhost:5173",
+                                "https://" + distribution.getDistributionDomainName()))
                         .allowMethods(List.of(CorsHttpMethod.GET, CorsHttpMethod.PUT, CorsHttpMethod.OPTIONS))
                         .allowHeaders(List.of("Authorization", "Content-Type"))
                         .build())
@@ -222,5 +293,8 @@ public class SmallstashStack extends Stack {
         CfnOutput.Builder.create(this, "UserPoolId").value(userPool.getUserPoolId()).build();
         CfnOutput.Builder.create(this, "UserPoolClientId").value(userPoolClient.getUserPoolClientId()).build();
         CfnOutput.Builder.create(this, "VaultBucketName").value(vaultBucket.getBucketName()).build();
+        CfnOutput.Builder.create(this, "SiteUrl")
+                .value("https://" + distribution.getDistributionDomainName())
+                .build();
     }
 }

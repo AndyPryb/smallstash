@@ -82,9 +82,11 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   (Cognito SRP) + minimal vault CRUD work end-to-end against the live API.
   `npm test` (22 tests, incl. Argon2id cross-checked against `@noble/hashes`
   + an RFC 9106 vector) and `npm run build` both verified clean. Not yet
-  built: signup UI, password generator, offline-unlock UI, MFA UI, or any
-  hosting for the built output (no public URL yet) — see
-  [docs/todo.md](docs/todo.md) "PWA kickoff scaffold" for the full list.
+  built: signup UI, password generator, offline-unlock UI, MFA UI. Hosting
+  for the built output (S3 + CloudFront, OAC-fronted) is now in
+  `infra/`'s `SmallstashStack` but **not deployed** — no public URL yet.
+  See [docs/todo.md](docs/todo.md) "PWA kickoff scaffold" / "PWA hosting"
+  for the full list.
 
 ## Where to look for what
 

@@ -21,9 +21,11 @@ S3 bucket, Lambda, and HTTP API all exist and are verified working (JWT
 enforcement confirmed against the live API, not just the code). The PWA can
 sign in via Cognito SRP, derive the Master Key (Argon2id via `hash-wasm`,
 cross-checked against `@noble/hashes` + an RFC 9106 vector), unwrap the
-Vault Key, and decrypt/edit/re-encrypt the vault against the live API — but
-nothing serves the built client yet (no CloudFront/S3 hosting in `infra/`),
-so there's no public URL to click through end-to-end. See §9b for what was
+Vault Key, and decrypt/edit/re-encrypt the vault against the live API.
+S3 + CloudFront hosting for the built client now exists in `infra/`
+(`SmallstashStack`'s `SiteBucket`/`SiteDistribution`, OAC-fronted, SPA
+error-response fallback to `index.html`) but is **not deployed yet** — see
+[docs/todo.md](todo.md) "PWA hosting". See §9b for what was
 checked on the infra side, [docs/todo.md](todo.md) for the live stack
 outputs and the PWA's remaining follow-on work, [CLAUDE.md](../CLAUDE.md)
 for the always-current one-line version.

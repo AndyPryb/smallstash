@@ -4,6 +4,69 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
+## Follow-ups from PWA hosting work (2026-08-24)
+
+- [ ] **Cognito signup/verification emails land in spam.** Default Cognito
+      email (no SES, shared `no-reply@verificationemail.com` sender) has
+      poor deliverability out of the box. Fix is likely `UserPool`'s
+      `email` prop pointing at a verified SES identity (custom domain or at
+      least a verified address) instead of Cognito's default sender -
+      needs an SES identity verified first (console or CDK
+      `SesVerifiedIdentity`), then wiring `UserPool.Builder.email(...)` to
+      it. Low urgency while it's just the one test user, but blocks a real
+      multi-user rollout.
+- [ ] **Custom domain for the S3/CloudFront site** - currently only the
+      auto-generated `*.cloudfront.net` URL (see "PWA hosting" below).
+      Needs a Route 53 hosted zone + ACM cert (must be in `us-east-1`
+      regardless of the stack's region, CloudFront requirement) +
+      `Distribution`'s `domainNames`/`certificate` props. Not blocking a
+      first working deploy.
+- [ ] **Custom domain for the backend HTTP API** - currently only the
+      auto-generated `*.execute-api.eu-west-1.amazonaws.com` URL. Needs an
+      ACM cert (this one *can* be `eu-west-1`, matches the API's region)
+      + API Gateway v2 custom domain + base path mapping. Same Route 53
+      zone as the site domain if done together.
+- [ ] **Security research pass: DDoS/brute-force/API-abuse/AWS-cost-abuse
+      hardening.** Goal is best-practice defence in depth across API,
+      AWS account, and client - not just "it works." Root and the `Andy`
+      IAM user already have MFA; scope is everything else. Things to
+      evaluate, roughly in order of likely impact:
+      - **AWS WAF** in front of the HTTP API and/or CloudFront - rate-based
+        rules, managed rule groups (common exploits, bad bot lists) - was
+        previously deferred as unnecessary cost/complexity for a ~20-user
+        app (see "Deferred" below); worth revisiting specifically for the
+        brute-force/DDoS angle now that there's a real public URL.
+      - **Cognito-side brute-force protection** - advanced security
+        features (adaptive auth, compromised-credentials check) vs. cost;
+        at minimum confirm Cognito's built-in per-IP/per-user throttling
+        on `InitiateAuth`/`RespondToAuthChallenge` is actually adequate for
+        SRP.
+      - **API Gateway throttling** already exists (`rateLimit(10)`,
+        `burstLimit(20)` in `SmallstashStack`) - re-check these are the
+        right numbers now that there's a public URL and not just
+        internal testing, and consider a WAF rate-based rule as a second
+        layer (API Gateway throttling alone doesn't block a single bad
+        actor from consuming the whole budget before the 429s kick in).
+      - **Lambda cost-abuse ceiling** - reserved/provisioned concurrency
+        limits or account-level Lambda concurrency caps, so a flood of
+        requests (even throttled 429s upstream slipping through, or a
+        future bug) can't run up a large bill or peg concurrency for
+        legitimate use. Also re-check `Function`'s `memorySize`/`timeout`
+        aren't more generous than the workload needs.
+      - **DynamoDB/S3 cost-abuse ceiling** - PAY_PER_REQUEST DynamoDB and
+        S3 both scale cost with request volume; consider CloudWatch
+        billing alarms (may already exist as an account-level safety net -
+        check "Account-level safety nets" below) as the actual backstop
+        here rather than trying to hard-cap either service.
+      - **Client-side**: CSP headers (via CloudFront response headers
+        policy), Cognito token storage location (confirm it's not
+        `localStorage` in a way that widens XSS blast radius beyond
+        what's already necessary for offline unlock), dependency audit
+        (`npm audit`) as a recurring check, not a one-time pass.
+      - Write findings + decisions to a new doc or a dedicated
+        architecture.md section once this research is done - this bullet
+        list is a starting point, not the final scope.
+
 ## Full teardown capability - `destroyData` context flag (2026-08-23)
 
 `SmallstashStack.java` reads a CDK context flag to decide the
@@ -508,43 +571,37 @@ unaffected by the new devDependencies.
       routing (login/signup/MFA/offline branches - currently only
       exercised by hand).
 
-## PWA hosting - `web/dist/` has nowhere to live yet (2026-08-23)
+## PWA hosting - CDK constructs written, not yet deployed (2026-08-24)
 
-`npm run build` in `web/` produces a working static bundle (verified clean,
-~56 KB gzipped JS + service worker + manifest - see
-[ADR-0002](decisions/0002-pwa-stack.md)), but nothing in `infra/` serves it.
-Today the only way to run the PWA at all is `npm run dev` on a developer's
-own machine - there is no URL a real user (i.e. not-you) could open.
+`SmallstashStack` now defines the full S3 + CloudFront hosting path for
+`web/dist/`: a private `SiteBucket` (`BLOCK_ALL`, DESTROY/auto-delete since
+it's disposable build output, not user data - deliberately separate from
+`VaultBucket`'s RETAIN policy), a `SiteDistribution` (CloudFront) reaching it
+via Origin Access Control (no public bucket policy), `index.html` as both
+default root object and the 403/404 error-response fallback (so client-side
+routing survives a refresh), and a `BucketDeployment` that uploads
+`web/dist/` and invalidates the cache on every `cdk deploy`. The HTTP API's
+CORS `allowOrigins` now includes the distribution's domain name (a
+same-stack CloudFormation token, resolved automatically - no manual step)
+alongside `localhost:5173` for local dev. Verified with a local `cdk synth`
+equivalent (`../mvnw compile exec:java` from `infra/`, after `npm run build`
+in `web/` so `web/dist/` exists) - produces a clean CloudFormation template,
+no AWS calls made.
 
-- [ ] **Add S3 + CloudFront static hosting to the CDK stack** - the natural
-      fit given the rest of the stack is already CDK-managed: an S3 bucket
-      for the built `dist/` files, CloudFront in front of it (HTTPS,
-      caching, and a single distribution URL), `index.html` as both the
-      default root object and the error-document fallback (needed so
-      client-side routing - if any gets added later - doesn't 404 on
-      refresh). This is a **new CDK construct set**, not a reuse of the
-      existing `smallstash-vaults` bucket, which is versioned/RETAIN-tagged
-      secret ciphertext storage - hosting assets are public, disposable
-      build output and shouldn't share a bucket or removal policy with that.
-- [ ] **Update `SmallstashStack`'s HTTP API CORS origin** once a real
-      CloudFront domain exists - currently only allows the Vite dev-server
-      placeholder (`localhost:5173`), which is fine for local dev but wrong
-      for anything else calling the API.
-- [ ] **Decide a deploy step for `web/dist/` itself** - CDK can create the
-      bucket/distribution, but getting fresh build output *into* the bucket
-      on every change needs either a CDK `BucketDeployment` construct (asset
-      upload baked into `cdk deploy`, simplest, couples FE deploys to a CDK
-      deploy) or a separate CI step (`aws s3 sync` + a CloudFront
-      invalidation, decoupled but one more moving part to set up). No
-      decision yet - default to `BucketDeployment` unless a reason to split
-      shows up, consistent with "prefer CDK code changes over manual steps"
-      in CLAUDE.md.
-- [ ] **No custom domain yet** - CloudFront's own `*.cloudfront.net` URL is
-      fine to start; a real domain (Route 53 + ACM cert) is a separate,
-      later decision, not blocking a first working deploy.
-- [ ] **This is an AWS-account-mutating change once it reaches `cdk deploy`**
-      - needs the usual explicit go-ahead each time per CLAUDE.md, same as
-      every other stack change.
+- [ ] **Not deployed yet** - this is an AWS-account-mutating change once it
+      reaches `cdk deploy` (creates a new bucket + CloudFront distribution).
+      Needs explicit go-ahead per CLAUDE.md, same as every other stack
+      change. Remember to run `npm run build` in `web/` before deploying -
+      CDK doesn't build it for you, same as the backend jar.
+- [ ] **No custom domain yet** - CloudFront's own `*.cloudfront.net` URL
+      (the `SiteUrl` stack output) is fine to start; a real domain
+      (Route 53 + ACM cert) is a separate, later decision, not blocking a
+      first working deploy.
+- [ ] **Deploy coupling**: `BucketDeployment` bakes the frontend upload into
+      `cdk deploy`, so a frontend-only change currently still needs a full
+      CDK deploy (fast/cheap, but couples the two). Fine for a ~20-user app;
+      revisit only if that friction becomes real (e.g. split into a CI step
+      doing `aws s3 sync` + CloudFront invalidation instead).
 
 ## Profile feature - not functionally wired up yet (2026-08-23)
 
