@@ -299,6 +299,19 @@ public class SmallstashStack extends Stack {
         // particular - aren't available until HttpApi is constructed further
         // down in this file than SiteDeployment is; order doesn't otherwise
         // matter since SiteDeployment explicitly excludes this same key.
+        // prune(false) is load-bearing, not decoration: BucketDeployment
+        // defaults to prune=true, i.e. `aws s3 sync --delete` against
+        // whatever it's given as its source. With two separate
+        // BucketDeployments sharing one bucket, ConfigDeployment's source is
+        // only ever this one file - left at the default, its own delete pass
+        // treats every other file SiteDeployment uploaded (the JS bundle,
+        // icons, etc.) as "not mine, delete it". Confirmed this actually
+        // happened live: two files silently vanished from the deployed
+        // bucket, which is what "site loads to a blank page" turned out to
+        // be - a CloudFront SPA-fallback 200 (text/html) for the missing JS
+        // module instead of the real file. SiteDeployment doesn't need this
+        // - it's meant to fully mirror web/dist (minus config.json, via
+        // .exclude above).
         BucketDeployment.Builder.create(this, "ConfigDeployment")
                 .sources(List.of(Source.jsonData("config.json", Map.of(
                         "region", this.getRegion(),
@@ -306,6 +319,7 @@ public class SmallstashStack extends Stack {
                         "clientId", userPoolClient.getUserPoolClientId(),
                         "apiBaseUrl", httpApi.getApiEndpoint()))))
                 .destinationBucket(siteBucket)
+                .prune(false)
                 .distribution(distribution)
                 .distributionPaths(List.of("/config.json"))
                 .build();

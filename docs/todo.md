@@ -4,6 +4,33 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
+## UI theming nod to the name's origin (2026-08-24)
+
+"smallStash" was inspired by the "Small Stash" storage item from the game
+Rust. Not scoped or designed yet - just captured so it isn't lost.
+
+- [ ] **Explore a UI design pass referencing the Rust "Small Stash" item**
+      (its look/iconography/palette) as a nod to the name's origin -
+      purely cosmetic, no functional requirements attached.
+
+## Document/attachment feature for secrets entries - requirements unclear (2026-08-24)
+
+Idea: let a vault entry hold a document/file attachment (e.g. a scanned
+ID, a recovery-codes printout), not just text fields. Raised in
+conversation only - not scoped yet.
+
+- [ ] **Clarify requirements before implementing** - open questions to
+      settle first: what counts as a "document" (arbitrary file upload vs.
+      a constrained type like PDF/image?), size limits (affects S3 storage
+      cost and the whole-vault-blob model - see
+      [ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md), a large
+      attachment inside the single encrypted vault blob changes the
+      cost/perf tradeoffs that decision was based on), whether it's
+      encrypted inline as part of the existing vault ciphertext blob or
+      stored as a separate per-entry S3 object (zero-knowledge must hold
+      either way - client-side AES-256-GCM before it ever leaves the
+      browser, same as everything else), and UI/UX for upload/download/
+      preview.
 ## PWA build/deploy gotcha - fixed structurally (2026-08-24)
 
 Discovered live: registration on the deployed site failed with `User pool
