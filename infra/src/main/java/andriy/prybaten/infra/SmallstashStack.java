@@ -67,16 +67,14 @@ public class SmallstashStack extends Stack {
     public SmallstashStack(final Construct scope, final String id, final StackProps props) {
         super(scope, id, props);
 
-        // Opt-in escape hatch for a genuine full teardown (dev/test convenience -
-        // docs/todo.md). Defaults to false = RETAIN (safe). Only takes effect
-        // after a `cdk deploy -c destroyData=true` (updates the deployed
-        // resources' DeletionPolicy in place) - THEN `cdk destroy` actually
-        // deletes them. CloudFormation deletes based on the deployed template's
-        // stored DeletionPolicy, not a fresh local synth, so `cdk destroy` alone
-        // (without deploying this flag first) still respects RETAIN regardless
-        // of what this code says. Never leave this true once real user data exists.
-        boolean destroyData = "true".equals(String.valueOf(this.getNode().tryGetContext("destroyData")));
-        RemovalPolicy dataRemovalPolicy = destroyData ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
+        // Always DESTROY - deliberate choice while this stack is 100% dev/test
+        // (see docs/todo.md "Full teardown"). No real user data lives here
+        // yet, so `cdk destroy` should tear down cleanly with no orphaned
+        // S3/DynamoDB/Cognito resources left behind to hunt down manually.
+        // This used to be a `destroyData` context flag defaulting to RETAIN -
+        // switch it back to that pattern (or hardcode RETAIN) before this
+        // ever holds real, non-test data; see docs/todo.md for the tradeoffs.
+        RemovalPolicy dataRemovalPolicy = RemovalPolicy.DESTROY;
 
         // ---------------------------------------------------------------
         // Storage (docs/decisions/0001-storage-s3-vs-dynamodb.md)
@@ -85,22 +83,18 @@ public class SmallstashStack extends Stack {
         // Bucket name is CDK-generated (not hardcoded) - S3 names are globally
         // unique across all of AWS, so we let CDK pick one and pass it to the
         // Lambda via env var instead of risking a collision with a name we
-        // guessed. RETAIN by default: losing this bucket loses every user's
-        // vault - `cdk destroy` must never take it out from under you by
-        // accident. autoDeleteObjects only activates alongside DESTROY (S3
-        // won't delete a non-empty bucket otherwise; this must match
-        // dataRemovalPolicy or CDK refuses to synth).
+        // guessed.
         Bucket vaultBucket = Bucket.Builder.create(this, "VaultBucket")
                 .versioned(true)
                 .encryption(BucketEncryption.S3_MANAGED)
                 .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
                 .removalPolicy(dataRemovalPolicy)
-                .autoDeleteObjects(destroyData)
+                .autoDeleteObjects(true)
                 .build();
 
         // DynamoDB table names are only unique per account+region, so a fixed
-        // name is safe here. Same RETAIN-by-default reasoning as the bucket -
-        // this is the KDF salt/wrapped-key metadata every login depends on.
+        // name is safe here. This is the KDF salt/wrapped-key metadata every
+        // login depends on.
         Table usersTable = Table.Builder.create(this, "UsersTable")
                 .tableName("smallstash-users")
                 .partitionKey(Attribute.builder().name("pk").type(AttributeType.STRING).build())
@@ -174,11 +168,11 @@ public class SmallstashStack extends Stack {
         // PWA hosting (web/dist -> S3, fronted by CloudFront)
         //
         // Bucket holds only the built static site (HTML/JS/CSS/wasm) - not
-        // user data, so unlike VaultBucket/UsersTable above this is always
-        // DESTROY/auto-delete regardless of the destroyData flag: losing it
-        // loses nothing but a `npm run build` + redeploy. Fully private
-        // (BLOCK_ALL) - CloudFront reaches it via Origin Access Control
-        // (OAC), never a public bucket policy.
+        // user data, so it's always DESTROY/auto-delete regardless of what
+        // dataRemovalPolicy above is set to: losing it loses nothing but a
+        // `npm run build` + redeploy. Fully private (BLOCK_ALL) - CloudFront
+        // reaches it via Origin Access Control (OAC), never a public bucket
+        // policy.
         Bucket siteBucket = Bucket.Builder.create(this, "SiteBucket")
                 .encryption(BucketEncryption.S3_MANAGED)
                 .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
