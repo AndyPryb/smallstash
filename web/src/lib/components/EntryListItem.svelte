@@ -16,6 +16,7 @@
    * in the list.
    */
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
+  import { normalizedUrl } from '../url.js';
 
   /** @type {{ entry: { id: string, title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
   let { entry, onremove, onupdate } = $props();
@@ -53,16 +54,8 @@
     return showPassword ? entry.password : '•'.repeat(Math.max(entry.password.length, 8));
   }
 
-  /**
-   * Entries.url is free-typed and commonly has no scheme (e.g. "example.com")
-   * - used as-is in an <a href>, that resolves as a *relative* link against
-   * this app's own origin instead of navigating out to the site, which looks
-   * like the link is just broken. Assume https if nothing more specific was
-   * given; the visible link text still shows exactly what the user typed.
-   */
-  function normalizedUrl(url) {
-    return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
-  }
+  // normalizedUrl lives in lib/url.js so it can be unit-tested - see the
+  // comment there for why a url field needs sanitising at all.
 
   function startEdit() {
     editTitle = entry.title;
