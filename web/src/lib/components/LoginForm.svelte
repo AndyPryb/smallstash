@@ -62,6 +62,17 @@
   small {
     color: #888;
   }
+  hr {
+    /* Browser default gives hr `margin-inline: auto`, which disables
+       flexbox's stretch-to-fill sizing on it (auto margins take priority
+       over align-items: stretch) - it collapses to width: 0 and then
+       centers that zero-width box, rendering as a stray dot instead of a
+       divider line. Reset explicitly instead of relying on UA defaults. */
+    width: 100%;
+    border: none;
+    border-top: 1px solid #333;
+    margin: 0;
+  }
   button {
     padding: 0.6rem;
     font-size: 1rem;

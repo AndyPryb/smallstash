@@ -1,4 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Small Stash">
   <rect width="512" height="512" rx="96" fill="#1b1f24"/>
-  <path d="M256 108c-52 0-94 42-94 94v42h-14c-18 0-32 14-32 32v122c0 18 14 32 32 32h216c18 0 32-14 32-32V276c0-18-14-32-32-32h-14v-42c0-52-42-94-94-94zm0 48c26 0 46 20 46 46v42h-92v-42c0-26 20-46 46-46zm0 156c18 0 32 14 32 32 0 12-6 22-16 27v29c0 9-7 16-16 16s-16-7-16-16v-29c-10-5-16-15-16-27 0-18 14-32 32-32z" fill="#5ac8a8"/>
+  <!-- Same pouch glyph as the in-app header (App.svelte's <h1>) - kept in
+       sync deliberately, see docs/todo.md "UI theming nod to the name's
+       origin". No dirt mound here (that version felt too busy/unclear at
+       favicon size) - just the tied sack. -->
+  <path d="M216,150 C190,190 175,240 160,290 C150,320 150,340 150,340
+           C150,380 190,400 256,400 C322,400 362,380 362,340
+           C362,340 362,320 352,290 C337,240 322,190 296,150 Z" fill="#c9a66b"/>
+  <rect x="223" y="112" width="66" height="46" rx="22" fill="#d8b87c"/>
+  <rect x="203" y="140" width="106" height="26" rx="13" fill="#4a3826"/>
+  <circle cx="256" cy="153" r="8" fill="#2e2216"/>
 </svg>

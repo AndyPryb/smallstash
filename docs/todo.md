@@ -277,6 +277,25 @@ to implement together as one pass:
       `NewerNoncurrentVersions: 3`, plus
       `AbortIncompleteMultipartUpload` after 7 days. Verified in the
       synthesized template.
+      **Correction (2026-08-24, found in review):** this was originally
+      described here and in architecture.md as capping a user at ~4
+      versions / ~2 MB. That is wrong. S3 applies `NoncurrentDays` and
+      `NewerNoncurrentVersions` as **AND**, not OR - a noncurrent version
+      is deleted only when it is *both* older than 90 days *and* has >=3
+      newer noncurrent versions behind it. Inside a 90-day window the
+      version count is therefore unbounded, and this rule limits long-term
+      accumulation from normal use rather than a deliberate burst. The
+      real burst bounds are invite-gated signup, the 10 rps stage
+      throttle, `reservedConcurrentExecutions(5)`, and the 512 KiB
+      per-write cap.
+- [ ] **Consider tightening the vault bucket's retention window.** Given
+      the AND semantics above, 90 days is generous for a personal app -
+      the realistic reason to keep an old vault version is "I broke
+      something last week", not last quarter. Dropping `NoncurrentDays` to
+      ~14-30 would shrink the accumulation window substantially at no
+      practical cost to recoverability. Not urgent (invite-gating means
+      only trusted accounts exist), just a cheap tightening whenever the
+      lifecycle rule is next touched.
 - [x] **512 KiB ciphertext size limit** on `PUT /vault` (implemented
       2026-08-24, **not deployed**). Set to 512 KiB rather than the 1 MiB
       first tried - a realistic vault is single-digit kilobytes, so this is

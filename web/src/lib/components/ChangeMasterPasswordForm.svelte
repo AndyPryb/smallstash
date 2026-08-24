@@ -121,6 +121,14 @@
   small {
     color: #888;
   }
+  hr {
+    /* See LoginForm.svelte for why this reset is needed - browser-default
+       hr margins disable flexbox stretch, collapsing it to a stray dot. */
+    width: 100%;
+    border: none;
+    border-top: 1px solid #333;
+    margin: 0;
+  }
   .actions {
     display: flex;
     gap: 0.5rem;

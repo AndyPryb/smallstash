@@ -208,7 +208,27 @@
 
 <main>
   <header>
-    <h1>Small Stash</h1>
+    <h1>
+      <!-- Small nod to the name's origin: Rust's "Small Stash" item, a
+           buried pouch you dig up to retrieve your loot - see
+           docs/todo.md "UI theming nod to the name's origin". Purely
+           decorative, discoverable only on hover; the padlock icon (browser
+           tab/PWA install) got the fuller version of this same redesign. -->
+      <svg class="stash-glyph" viewBox="0 0 512 512" aria-hidden="true">
+        <path
+          d="M216,150 C190,190 175,240 160,290 C150,320 150,340 150,340
+             C150,380 190,400 256,400 C322,400 362,380 362,340
+             C362,340 362,320 352,290 C337,240 322,190 296,150 Z"
+          fill="#c9a66b"
+        />
+        <rect x="223" y="112" width="66" height="46" rx="22" fill="#d8b87c" />
+        <rect x="203" y="140" width="106" height="26" rx="13" fill="#4a3826" />
+        <circle cx="256" cy="153" r="8" fill="#2e2216" />
+      </svg>
+      <span title="Named after Rust's Small Stash - a buried pouch you dig up to retrieve your loot.">
+        Small Stash
+      </span>
+    </h1>
   </header>
 
   {#if error}
@@ -288,8 +308,16 @@
     font-family: system-ui, sans-serif;
   }
   header h1 {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
     font-size: 1.25rem;
     margin-bottom: 1rem;
+  }
+  .stash-glyph {
+    width: 1.1em;
+    height: 1.1em;
+    flex-shrink: 0;
   }
   .error {
     background: #3a1d1d;
