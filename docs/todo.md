@@ -4,6 +4,81 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
+## PWA build/deploy gotcha - fixed structurally (2026-08-24)
+
+Discovered live: registration on the deployed site failed with `User pool
+client <old-id> does not exist` after a stack recreate. Root cause: Vite's
+`define` used to bake `AWS_REGION`/`COGNITO_USER_POOL_ID`/
+`COGNITO_CLIENT_ID`/`API_BASE_URL` into the JS bundle at **build time**, so
+a `web/dist/` built before a stack recreate kept pointing at IDs that no
+longer existed, even with `.env` already correct.
+
+**Fixed by switching to runtime config** instead of a rebuild-discipline
+workaround:
+- `web/src/lib/config.js` now fetches `/config.json` once at startup
+  (`main.js`, before the app mounts) instead of reading baked-in
+  constants. Covered by a new `config.test.js` (5 tests, mocks
+  `globalThis.fetch`).
+- `web/vite.config.js`'s `runtimeConfigPlugin` serves `/config.json` from
+  the local `.env` for `npm run dev` (a dev-server middleware) and writes
+  a real `dist/config.json` for `npm run preview` - both dev-only.
+- `infra/`'s `SmallstashStack` generates the **real** `config.json` from
+  live, resolved stack values (`Source.jsonData`, a new `ConfigDeployment`
+  `BucketDeployment`) on every `cdk deploy` - `userPool.getUserPoolId()`,
+  `userPoolClient.getUserPoolClientId()`, `httpApi.getApiEndpoint()`,
+  `this.getRegion()`. `SiteDeployment` (the one uploading `web/dist/`)
+  explicitly `.exclude(["config.json"])` so the dev-only copy never
+  overwrites the real one, regardless of upload order.
+- Net effect: `web/dist/` is now ID-agnostic. A future stack recreate
+  regenerates `config.json` automatically on `cdk deploy` - **no frontend
+  rebuild required**, this class of bug can't recur.
+
+Verified: local CDK synth shows `ConfigDeployment`'s `SourceMarkers`
+correctly referencing `Ref`/`Fn::GetAtt` (not literal values) for the pool/
+client/API IDs, and `SiteDeployment`'s `Exclude: ["config.json"]`; full
+`npm test` (84 tests) and `npm run build` both clean; built bundle
+confirmed to contain no hardcoded pool/client ID strings.
+
+- [ ] **Deploy this** - not yet pushed live (needs `cdk deploy`, your call
+      per usual).
+
+## Backend logging - not comprehensive yet (2026-08-24)
+
+No dedicated review of what the Lambda actually logs has been done.
+Right now it's whatever Micronaut's defaults produce - not a deliberate
+strategy for a security-sensitive backend (this is the one boundary
+that's *not* zero-knowledge - it sees Cognito identity, request metadata,
+ciphertext sizes, and any error detail a bug might accidentally leak into
+a stack trace).
+
+- [ ] **Design and add comprehensive backend logging** - structured
+      (JSON) request logs (auth outcome, route, status, latency, `sub` -
+      never plaintext/ciphertext body), error logging with enough context
+      to debug without ever logging secrets or the Master Password (which
+      the backend never sees anyway, but double-check no dependency logs
+      raw request/response bodies by default), and a decision on
+      retention/cost for CloudWatch Logs (a log group with no retention
+      policy keeps everything forever - cheap at this scale but still
+      worth setting explicitly). Ties into the security hardening pass
+      above - logs are also what you'd need to notice a brute-force/abuse
+      pattern in the first place.
+
+## UI input validation review - not yet audited (2026-08-24)
+
+No dedicated review has been done of client-side input validation across
+the PWA's forms (signup/login email format, password fields, vault entry
+fields, etc.) - e.g. whether email fields use a real validation regex vs.
+just `type="email"`'s loose browser-native check, what happens on
+malformed/edge-case input, whether validation errors are surfaced clearly
+to the user. Not a security boundary (the backend/Cognito enforce the
+real constraints; zero-knowledge means client validation is UX, not a
+trust boundary) but worth a pass for correctness/quality.
+
+- [ ] **Audit and tighten client-side form validation** across
+      `src/lib/components/` - email format, password/master-password field
+      constraints, vault entry field limits, and how validation errors are
+      shown to the user.
+
 ## Follow-ups from PWA hosting work (2026-08-24)
 
 - [ ] **Cognito signup/verification emails land in spam.** Default Cognito
@@ -125,15 +200,26 @@ assumed from the code:
       exists with `MfaConfiguration: OPTIONAL` as designed.
 
 Live stack outputs (account `060795901917`, region `eu-west-1`) - **updated
-2026-08-23 after a `cdk destroy` (manual, orphans included) +
-`cdk deploy -c destroyData=true` full recreate — every ID below is new,
-the ones from the first deploy no longer exist**:
+2026-08-24 after a `cdk deploy` with the always-DESTROY policy (see "Full
+teardown capability" above) — every ID below is new again, the ones from
+the previous deploy no longer exist**. This deploy also added CloudFront
+hosting for the PWA (`SiteUrl`) - verified post-deploy: `SiteUrl` serves
+`index.html` (200, CloudFront cache miss/hit both checked), a deep
+client-side route (`/vault/entry/42`) correctly rewrites to `index.html`
+(200, not a raw S3 404), the built JS bundle/manifest/service worker all
+load, direct S3 access to both `SiteBucket` and `VaultBucket` returns 403
+(OAC is doing its job, no public bypass), `GET /vault` unauthenticated
+still 401s, and a CORS preflight from the `SiteUrl` origin against
+`ApiUrl` succeeds (`access-control-allow-origin` echoes it back):
 ```
-ApiUrl            = https://7elwt9j0u0.execute-api.eu-west-1.amazonaws.com
-UserPoolId        = eu-west-1_CY70Hunz3
-UserPoolClientId  = es8shgod8c4glft5nrn1hennc
-VaultBucketName   = smallstashstack-vaultbucket95cbf29a-jxpgfio6ua7w
+ApiUrl            = https://prk5kj0aq8.execute-api.eu-west-1.amazonaws.com
+SiteUrl           = https://d3pzt5m3kmghz7.cloudfront.net
+UserPoolId        = eu-west-1_Ol6ed2DbJ
+UserPoolClientId  = 7g2krg0h01l25ud3eqqkh1sb17
+VaultBucketName   = smallstashstack-vaultbucket95cbf29a-gjcce2ynr0zz
+SiteBucketName    = smallstashstack-sitebucket397a1860-qqtuwnnfao9m
 ```
+`.env` at the repo root updated to match (gitignored, not shown here).
 
 ## Manual test user (2026-08-23) — stand-in, not the real signup flow
 
@@ -143,15 +229,25 @@ account, **wrong for real users**). See architecture.md §9 for why this
 isn't the real flow: the PWA must use the actual self-service `SignUp` +
 `ConfirmSignUp` APIs instead.
 
-**Recreated 2026-08-23** in the fresh pool after the full teardown/rebuild
-above - same email/password as before, new `sub` (new pool = new identity,
-even with identical credentials):
+**Gone as of the 2026-08-24 deploy** - that pool was destroyed and
+recreated fresh (see "Live stack outputs" above), so the `sub` recorded
+below (from the 2026-08-23 pool) no longer resolves to anything.
+**Deliberately not recreated** (2026-08-24) - not needed right now, and
+the stack is about to go through another destroy/recreate cycle anyway
+(see "Full teardown capability" above) which would just orphan it again.
+`.env`'s `TEST_USER_EMAIL`/`TEST_USER_PASSWORD` are left blank until
+there's an actual need. Previous (now-stale) identity, kept only as a
+record of the pattern:
 ```
 email (sign-in alias) = test@example.com
-password               = <TEST_USER_PASSWORD - do not commit, see your own local notes>
-sub (real identity)    = 2275b414-90e1-704f-8271-e318f8ced185
+password               = <was in TEST_USER_PASSWORD - never committed>
+sub (real identity)    = 2275b414-90e1-704f-8271-e318f8ced185   # STALE - old pool, gone
 ```
 
+- [ ] **Recreate the manual test user** (`admin-create-user` +
+      `admin-set-user-password --permanent` against whatever `UserPoolId`
+      is live at the time) only once `tests/api/` or manual sign-in
+      testing is actually needed again.
 - [ ] Replace/remove this manual user once the PWA has a real signup flow
       - it's a test artifact, not meant to be long-lived.
 

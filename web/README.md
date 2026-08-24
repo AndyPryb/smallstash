@@ -15,14 +15,21 @@ cd web
 npm install
 ```
 
-Config comes from `.env` at the **repo root** (not this folder) — the exact
-same file and same four values (`AWS_REGION`/`COGNITO_USER_POOL_ID`/
-`COGNITO_CLIENT_ID`/`API_BASE_URL`) `tests/api/` already uses, no
-`VITE_`-prefixed duplicates needed. Copy `.env.example` there if you haven't
-already, and fill in those four (see `docs/todo.md`'s "Live stack outputs",
-cross-check they're still current). `vite.config.js` explicitly whitelists
-just those four names into the client bundle via `define` — everything else
-in `.env` (like `TEST_USER_PASSWORD`) never reaches shipped JS.
+Config (`AWS_REGION`/`COGNITO_USER_POOL_ID`/`COGNITO_CLIENT_ID`/
+`API_BASE_URL`) is **fetched at runtime from `/config.json`**, not baked
+into the JS bundle — see `src/lib/config.js`. This means a Cognito/API
+stack recreate never requires a frontend rebuild: `infra/`'s
+`SmallstashStack` regenerates `config.json` from the live stack's actual
+values on every `cdk deploy` (`ConfigDeployment`, a `BucketDeployment`
+using `Source.jsonData`).
+
+For **local dev/preview only**, `vite.config.js`'s `runtimeConfigPlugin`
+serves/writes the same shape from `.env` at the **repo root** (not this
+folder) — the exact same file and same four values `tests/api/` already
+uses. Copy `.env.example` there if you haven't already, and fill in those
+four (see `docs/todo.md`'s "Live stack outputs", cross-check they're still
+current). Everything else in `.env` (like `TEST_USER_PASSWORD`) never
+reaches `/config.json` or shipped JS — only those four names are read.
 
 ## Run
 
@@ -30,7 +37,7 @@ in `.env` (like `TEST_USER_PASSWORD`) never reaches shipped JS.
 npm run dev       # http://localhost:5173, live-reloads, talks to the real deployed API
 npm run build     # production build -> dist/ (static files, no server needed to host them)
 npm run preview   # serve the dist/ build locally, to sanity-check the built output
-npm test          # 79 tests, node's built-in test runner, no browser needed
+npm test          # 84 tests, node's built-in test runner, no browser needed
 ```
 
 `npm test` runs with `--experimental-test-module-mocks` (see `package.json`) -
@@ -99,6 +106,11 @@ src/lib/components/  Svelte UI components.
   (happy paths and the actual failure modes - wrong password, wrong MFA
   code, offline write rejection, no active session) plus the inactivity
   auto-lock timer (via `node:test`'s fake timers - no real 15-minute wait).
+- `config.test.js` — the runtime `/config.json` fetch (see "Setup" above):
+  throws if read before `loadConfig()` resolves, only fetches once, and
+  rejects on a non-OK response or a response missing a required key. Mocks
+  `globalThis.fetch` directly rather than a module, since that one network
+  call is config.js's whole job.
 
 **Not covered, and a real gap:** no Svelte *component* tests exist (`App.svelte`,
 the forms, `EntryListItem.svelte`, etc.) - only the `lib/` logic underneath
