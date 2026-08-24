@@ -115,23 +115,81 @@ Summary:
 
 | PK | SK | Attributes | Purpose |
 |---|---|---|---|
-| `USER#<cognito-sub>` | `PROFILE` | `createdAt`, `plan`, `storageBytesUsed`, `displayName?` | app-level user metadata, not in Cognito attributes |
-| `USER#<cognito-sub>` | `KEYS` | `kdfSalt`, `kdfParams` (memory/iterations/parallelism), `wrappedVaultKey`, `wrappedVaultKeyByRecovery`, `keyVersion` | read once per login, before/alongside the vault blob fetch |
+| `USER#<cognito-sub>` | `PROFILE` | `createdAt`, `plan`, `storageBytesUsed` | app-level user metadata, not in Cognito attributes |
+| `USER#<cognito-sub>` | `KEYS` | `kdfSalt`, `kdfMemoryKib`, `kdfIterations`, `kdfParallelism`, `wrappedVaultKeyByMaster`, `wrappedVaultKeyByRecovery`, `keyVersion` | read once per login, before/alongside the vault blob fetch |
+
+Attribute names above are the real ones (`UserKeysItem`/`UserProfileItem`);
+KDF params are three flat fields, not a nested `kdfParams` map. Of the
+`PROFILE` fields, only `createdAt` is meaningful today — `plan` is
+hardcoded `"free"` and `storageBytesUsed` is written as `0` and never
+updated (see [todo.md](todo.md), "Profile feature").
 
 Single-table design (PK/SK convention) leaves room to add
 `SK = ENTRY#<id>` items later for per-entry sync without a new table or
 migration of existing data.
 
-### 4b. S3 — `smallstash-vaults` bucket (versioning on)
+**This item is the most safety-critical row in the system**, and its risk
+profile is *asymmetric* with the vault blob below. The S3 blob is
+versioned, so a bad write is recoverable; the `KEYS` item is a single
+copy. Overwrite it with material derived from a different Master Password
+and every S3 vault version — current and historical — becomes permanently
+undecryptable ciphertext. Two controls exist because of this:
+
+- **Point-in-time recovery** is enabled on the table (35 days, continuous).
+  It is the only thing that can undo a destructive write here.
+- **`PUT /keys` is a conditional write**
+  (`attribute_not_exists(pk) OR keyVersion < :new`), so a stale or replayed
+  request can't clobber newer key material — it gets HTTP 409 instead.
+  `keyVersion` is unix-*seconds* minted client-side, and the client steps it
+  past the stored value rather than trusting its own clock (a device whose
+  clock lagged the last writer would otherwise be permanently unable to
+  change its Master Password).
+
+### 4b. S3 — vault bucket (versioning on)
 
 ```
-s3://smallstash-vaults/users/{cognito-sub}/vault.json.enc
+s3://<cdk-generated-bucket-name>/users/{cognito-sub}/vault.json.enc
 ```
+
+The bucket name is **CDK-generated, not `smallstash-vaults`** — S3 names
+are globally unique across all of AWS, so the stack lets CDK pick one and
+passes it to the Lambda via the `SMALLSTASH_VAULT_BUCKET` env var. The
+current live value is in [todo.md](todo.md)'s "Live stack outputs"; it
+changes on every full stack recreate.
 
 One whole-vault encrypted blob per user, replacing the previous plan's
 *two* S3 objects (the `keys.json` piece has moved to DynamoDB, §4a).
 Versioning stays on for free rollback if a corrupt/malicious write ever
 lands.
+
+Two bounds on that versioning, both deliberate:
+
+- **Lifecycle rule**: `NoncurrentVersionExpiration` at 90 days with
+  `NewerNoncurrentVersions: 3`; incomplete multipart uploads abort after 7
+  days. Without this, versioning grows storage without bound — every save
+  keeps the previous blob forever.
+- **512 KiB ceiling** per `PUT /vault` (`VaultController.MAX_CIPHERTEXT_BYTES`,
+  with `micronaut.server.max-request-size=1MB` behind it). A realistic vault
+  is single-digit KB, so this is ~100x headroom.
+
+⚠️ **Read the lifecycle rule's semantics carefully — they are `AND`, not
+`OR`.** S3 deletes a noncurrent version only when it is *both* older than
+`NoncurrentDays` **and** has at least `NewerNoncurrentVersions` newer
+noncurrent versions behind it. So this rule does **not** cap the version
+*count* at 4. Inside any 90-day window, versions accumulate with no count
+limit; the rule bounds long-term accumulation from normal use, not a burst.
+
+What actually bounds a burst is the layered set, not this rule alone:
+invite-gated signup (an attacker needs an account at all), the stage
+throttle (10 rps), `reservedConcurrentExecutions(5)`, and the 512 KiB
+per-write cap. Tightening the retention window is cheap if that ever feels
+too loose — see [todo.md](todo.md).
+
+Version rollback is an **operator-only** path: `GET /vault` never passes a
+`versionId`, so the API always returns the current version and no client can
+request an older one. Recovering one means reaching for
+`aws s3api list-object-versions` by hand. This costs nothing in
+confidentiality — every version is ciphertext either way.
 
 **Why not move the vault blob into DynamoDB too:** a 400 KB per-item limit
 would eventually force multi-item vaults as entry count grows, plus more
@@ -156,6 +214,22 @@ becomes an observed problem.
   today — retrofitting multi-tenancy later would mean re-keying all
   existing S3/DynamoDB data by a newly-invented user ID, which is exactly
   the kind of rework this decision avoids.
+- **Sign-up is invite-gated.** Self-signup is still *enabled* on the pool,
+  but a **PreSignUp Lambda trigger** rejects any registration that doesn't
+  present the current invite code (passed as Cognito `validationData`, not
+  a user attribute — nothing about it persists on the account). This
+  closes the original hole: the pool id and client id are published in the
+  PWA's `config.json` **by design** (they're identifiers, not credentials,
+  and are embedded in the JS bundle regardless), so before the gate,
+  anyone who found the CloudFront URL could register and consume AWS
+  resources on this account. Hiding those IDs was never the fix — gating
+  registration was.
+  The code lives in `SMALLSTASH_INVITE_CODE` in the gitignored repo-root
+  `.env`, read at synth time by `SmallstashStack.resolveInviteCode()`.
+  **The synth hard-fails if it's unset** rather than falling back to a
+  default that could ship by accident. `PreSignUp_AdminCreateUser` is let
+  through untouched, so `admin-create-user` still works as a manual
+  fallback — it already requires IAM credentials.
 - **Cognito Free tier:** ~10,000 MAU forever (Essentials tier) — a
   personal-to-small-startup user base costs $0 on the auth side
   indefinitely.
@@ -163,11 +237,34 @@ becomes an observed problem.
   access to the S3 bucket and DynamoDB table (a single shared role — this
   is *not* per-caller scoped via Cognito Identity Pool + STS, which would
   be the "enterprise" approach). Instead, **the application code enforces
-  authorization on every request**: extract `sub` from the verified JWT,
-  compare it against the resource owner encoded in the request path/key,
-  reject on mismatch. This is simpler to build and reason about at this
-  project's scale; Identity-Pool-scoped IAM is worth adding only if this
-  ever needs to satisfy a stricter multi-tenant compliance bar.
+  authorization on every request** via `CurrentUser.subOf(authentication)`.
+
+  Worth being precise about *how*, because it's stronger than a
+  "compare and reject" check and an earlier version of this doc described
+  it wrongly: there is **no comparison, because there is nothing to
+  compare against**. Neither route takes a user identifier — `/vault` and
+  `/keys` have no path or query parameter naming an owner. The S3 key
+  (`users/{sub}/vault.json.enc`) and the DynamoDB partition key
+  (`USER#{sub}`) are *derived entirely* from the verified JWT's `sub`
+  claim, which is server-asserted and not client-controllable. A user
+  cannot express a request for someone else's data in the first place, so
+  there is no IDOR surface and no authorization branch that could be
+  gotten wrong. Any future endpoint that *does* accept an identifier from
+  the client would break this property and needs an explicit check.
+
+  Two independent layers verify the token before that point: API
+  Gateway's native Cognito JWT authorizer (so a bad token never reaches
+  the Lambda) and `micronaut-security-jwt` in-Lambda. **Caveat on the
+  second layer**: it currently validates the *signature* against the
+  pool's JWKS plus standard time claims, but not `iss`, `aud`, or
+  `token_use` — so it accepts any token signed by that pool. Low impact
+  today with one pool and one app client; it would silently fail to
+  constrain a second app client added later. Tightening it is tracked in
+  [todo.md](todo.md).
+
+  This is simpler to build and reason about at this project's scale;
+  Identity-Pool-scoped IAM is worth adding only if this ever needs to
+  satisfy a stricter multi-tenant compliance bar.
 - **Cognito login password vs. vault Master Password — recommended:
   two fully independent secrets** (not the same secret derived two ways).
   Rationale: keeps blast radius separate — if the Cognito login path is
@@ -186,7 +283,23 @@ becomes an observed problem.
   [todo.md](todo.md)).
 - **Optional TOTP MFA** on the Cognito login step — cheap, adds a layer
   independent of the vault's own crypto. Not required, user's choice at
-  signup.
+  signup. Making it **required** is a decided-but-unimplemented change
+  (see [todo.md](todo.md)'s security review); the UI already exists
+  (`MfaCodeForm.svelte`).
+- **Brute-force protection is Cognito's, and it is not configurable.**
+  After 5 failed password attempts Cognito locks the user for `2^(n-5)`
+  seconds, escalating to a ~15 minute cap, resetting on a successful
+  sign-in or 15 minutes of inactivity; the same escalation applies to
+  failed MFA codes. Worth knowing what this does *not* cover: it's
+  per-user, not per-IP, so it blunts credential stuffing against one
+  account but not one password sprayed across many. Also note **AWS WAF
+  cannot be attached to an API Gateway HTTP API (v2) at all** — only REST
+  APIs, ALB, CloudFront, AppSync, and Cognito user pools — and WAF's
+  account-takeover (`ATP`) and account-creation-fraud (`ACFP`) managed
+  rule groups are explicitly *forbidden* on Cognito user pools, so the
+  purpose-built anti-credential-stuffing rulesets aren't reachable here
+  either. See [todo.md](todo.md)'s "Brute-force / IP-blocking research"
+  for why fail2ban/CrowdSec-style tooling doesn't fit a serverless stack.
 - **Master Key session caching (PWA, v1): in-memory only, never
   persisted.** The two-independent-secrets design means the Master
   Password is re-typed every session by default (nothing to reuse is
@@ -219,6 +332,31 @@ range.
 | Cognito | ~10,000 MAU free (Essentials) forever | $0 |
 | S3 | $0.023/GB-month storage; 5 GB free for 12 months (new accounts) | ~$0 (few KB-MB/user) |
 | DynamoDB (on-demand) | $1.25/million WRU, $0.25/million RRU, $0.25/GB-month | ~$0 (dozens of requests/month) |
+
+**Cost-abuse controls (the reason this stays ~$0 even under attack).** The
+free-tier figures above describe *expected* usage; they say nothing about a
+hostile one. Four bounds exist specifically so a bad actor can't turn this
+account into someone else's compute budget:
+
+| Control | Where | What it bounds |
+|---|---|---|
+| Invite-gated signup | PreSignUp Lambda trigger | who can get an account at all — the root cause |
+| 512 KiB per `PUT /vault` + S3 lifecycle rule | `VaultController`, `SmallstashStack` | storage growth per user (~2 MB worst case) |
+| `reservedConcurrentExecutions(5)` | Lambda | GB-seconds under a flood — throttling caps requests/sec, concurrency caps how many run *at once* |
+| Stage throttle (10 rps / 20 burst) | HTTP API stage | request rate |
+
+Note the account's two AWS Budgets ($15 monthly, $1 zero-spend) are
+**notification-only and evaluate roughly 3x/day** — they are a smoke alarm,
+not a circuit breaker. A CloudWatch alarm on Lambda invocations (minutes,
+not hours) and a Budgets Action applying a Deny policy to the Lambda's
+**execution role** — not `smallstash-deployer`, which is never in the live
+request path — are both tracked in [todo.md](todo.md), not yet built.
+
+**Cognito tier caveat:** the $0 line above assumes the current
+**Essentials** tier. The decided-but-unimplemented move to **Plus** (for
+Threat Protection: compromised-credential detection + adaptive auth) is
+**$0.02/MAU with no free tier** — roughly $0.40/month at 20 users. Small,
+but it's the first line item that stops being literally zero.
 
 **Why on-demand DynamoDB, not provisioned:** provisioned capacity has an
 "Always Free" 25 WCU/25 RCU/25 GB tier that's tempting, but it requires
@@ -330,39 +468,83 @@ Backend v1 storage + auth-scaffolding slice is built (this session):
   `mvn test-compile` (clean compile, all API usage type-checks) but not
   actually executed end-to-end. Run `mvn test` locally with Docker
   Desktop up before trusting them fully.
-- **Not built yet:** signup flow wiring `keys` write to a Cognito
-  post-confirmation trigger vs. an explicit client call; the PWA client
-  itself (nothing to call these APIs from yet). **A manual test user
-  exists** (`admin-create-user` + `admin-set-user-password`, 2026-08-23,
-  credentials in [todo.md](todo.md)) purely to exercise the deployed API
-  by hand — this is a stand-in, not the real flow. The PWA must use the
-  actual self-service `SignUp` API (email verification code, then
-  `ConfirmSignUp`), not admin-created users — admin-create bypasses email
-  verification entirely, which is fine for a one-off manual test account
-  and wrong for real users.
+- **Security hardening (2026-08-24, Phase 0+1 of the security review — in
+  the repo, NOT yet deployed):** `VaultController` enforces a 512 KiB
+  ciphertext ceiling and maps malformed Base64 to 400 / oversized to 413
+  (both previously an unhandled 500); `DynamoDbUserKeysRepository.saveKeys`
+  is a conditional write with `KeyVersionConflictException` → 409. See
+  §4a/§4b above and [todo.md](todo.md) for the full finding list.
+- **The PWA client exists** (`web/`, see §9c and
+  [ADR-0002](decisions/0002-pwa-stack.md)) — this section's original "no
+  client to call these APIs from yet" is long stale. Signup uses the real
+  self-service `SignUp` + `ConfirmSignUp` flow, now carrying an invite
+  code in `validationData` (§5).
+- **The manual test user is gone** — it lived in a pool that has since been
+  destroyed and recreated. `.env`'s `TEST_USER_EMAIL`/`TEST_USER_PASSWORD`
+  are deliberately blank; recreate one only if `tests/api/` is needed again
+  (see [todo.md](todo.md), "Manual test user"). `admin-create-user`
+  bypasses email verification, which is fine for a one-off test account and
+  wrong for real users.
+- **Known gap:** `cognito.js`'s `signIn` *rejects* on Cognito's
+  `NEW_PASSWORD_REQUIRED` challenge instead of driving a set-new-password
+  step, so an `admin-create-user` account cannot complete first login
+  through the PWA today. Doesn't affect the invite-code flow; it does mean
+  the "admin-create as manual fallback" path isn't usable end-to-end.
+- **Not built yet:** whether the `keys` write at signup should move to a
+  Cognito post-confirmation trigger rather than an explicit client call.
 
-### 9b. Infra (`infra/` — CDK, Java) — defined and verified, NOT deployed
+### 9b. Infra (`infra/` — CDK, Java) — deployed 2026-08-23; unreleased changes pending
+
+Deployed and live, but **the repo is ahead of the deployed stack**: the
+Phase 0+1 security work (2026-08-24) is committed and synth-verified but
+has never been `cdk deploy`'d. Anything marked "pending deploy" below
+exists only in code.
 
 `SmallstashStack` (`infra/src/main/java/andriy/prybaten/infra/`) defines,
 as code, every AWS resource this project needs:
 
-- Cognito User Pool — self-signup, SRP-only client, optional TOTP MFA,
-  strong password policy, `RETAIN` removal policy.
-- DynamoDB `smallstash-users` table (PAY_PER_REQUEST, `RETAIN`).
-- S3 vault bucket (versioned, `RETAIN`, CDK-generated name — not
-  hardcoded, since S3 names are globally unique; passed to the Lambda via
-  env var).
+- Cognito User Pool — SRP-only client, optional TOTP MFA, strong password
+  policy. Self-signup is enabled but **gated by a PreSignUp Lambda trigger
+  checking an invite code** (§5) — *pending deploy*.
+- DynamoDB `smallstash-users` table (PAY_PER_REQUEST) with **point-in-time
+  recovery** — *pending deploy*.
+- S3 vault bucket (versioned, CDK-generated name — not hardcoded, since S3
+  names are globally unique; passed to the Lambda via env var) with a
+  **noncurrent-version lifecycle rule** — *pending deploy*.
 - The backend Lambda itself, `Runtime.JAVA_25`, handler
   `io.micronaut.function.aws.proxy.payload2.APIGatewayV2HTTPEventFunction`,
   with `MICRONAUT_SECURITY_ENABLED`, `COGNITO_JWKS_URL`,
   `MICRONAUT_ENVIRONMENTS=lambda`, and the bucket/table names all wired
   automatically from the resources the same stack creates — not a
-  manually-remembered post-deploy step.
+  manually-remembered post-deploy step. Plus
+  `reservedConcurrentExecutions(5)` and a 30-day-retention log group —
+  *both pending deploy*.
 - HTTP API with a native `HttpUserPoolAuthorizer`, explicit throttling
   (rate 10/s, burst 20 — cheap insurance given real usage is a handful of
   requests every few days; AWS's much higher account-level default stays
-  in place regardless), and CORS (currently allowing a `localhost:5173`
-  placeholder origin — must be updated once the PWA has a real domain).
+  in place regardless), CORS, and **access logging** to a 30-day log group
+  (*pending deploy*) recording source IP / time / method / route / status /
+  request id — deliberately no bodies.
+
+⚠️ **Two deploy-time gotchas, both of which fail confusingly if missed:**
+
+1. **`SMALLSTASH_INVITE_CODE` must be set in the repo-root `.env`** or the
+   synth aborts with an explanatory `IllegalStateException`. This is
+   intentional (§5) — the alternative is shipping an ungated or
+   default-coded signup endpoint. `.env` is gitignored, so a fresh clone
+   has to set it.
+2. **All three data resources are `RemovalPolicy.DESTROY`**, not `RETAIN`
+   as earlier versions of this doc claimed. That is a *deliberate,
+   temporary* choice for the pre-production destroy/recreate loop, marked
+   with an inline `!! MUST FLIP TO RETAIN BEFORE THE FIRST REAL SECRET !!`
+   comment in `SmallstashStack.java`. **Flipping it is the gate on storing
+   real secrets** — `cdk destroy` currently deletes every vault, and the
+   DynamoDB `KEYS` item has no versioning to fall back on (§4a). See
+   [todo.md](todo.md)'s security review for the exact change list.
+
+CORS currently allows `http://localhost:5173` alongside the CloudFront
+origin — fine for dev, tracked for removal before this is treated as
+production.
 
 **Deployed (2026-08-23):** `cdk bootstrap` + `cdk deploy` both run
 (deployer always drives `deploy` themselves — the stack touches IAM, so

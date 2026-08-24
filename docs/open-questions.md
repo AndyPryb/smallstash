@@ -10,9 +10,12 @@ one-line pointer.
 
 1. **Storage: hybrid S3 + DynamoDB, per [ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md).**
    **Status: Resolved — confirmed and implemented.** `smallstash-users`
-   DynamoDB table (profile + KDF/key metadata) + `smallstash-vaults` S3
-   bucket (whole-vault blob), see architecture.md §4 and the `vault`/`keys`
-   packages in `src/main/java/andriy/prybaten`.
+   DynamoDB table (profile + KDF/key metadata) + the S3 vault bucket
+   (whole-vault blob). Note the bucket is **not** named `smallstash-vaults`
+   as this line long claimed — S3 names are globally unique, so CDK
+   generates one and passes it to the Lambda via `SMALLSTASH_VAULT_BUCKET`.
+   See architecture.md §4 and the `vault`/`keys` packages in
+   `src/main/java/andriy/prybaten`.
 
 2. **Cognito login password vs. vault Master Password.**
    **Status: Resolved — two independent secrets**, per architecture.md §5.
@@ -37,8 +40,12 @@ one-line pointer.
    (re-confirming #2), **plus memory-only Master Key caching for v1**:
    keep the derived Master Key in a plain JS variable for the duration of
    an active session (never written to localStorage/IndexedDB/any
-   persistent store), cleared on tab close / inactivity timeout. Nothing
-   to implement yet - no PWA project exists. A hardware-backed persistent
+   persistent store), cleared on tab close / inactivity timeout.
+   **Implemented and re-verified 2026-08-24**: `session.js` holds it in a
+   module-level variable with a 15-minute inactivity auto-lock; a grep of
+   `web/src` confirms the only `localStorage` use is a non-secret
+   `{email, sub}` for the offline-unlock flow — no key material.
+   A hardware-backed persistent
    version (WebAuthn platform authenticator + PRF/largeBlob extension,
    survives a full browser restart) is a legitimate future v2 - real
    cross-browser support gaps and meaningfully more engineering, not
@@ -86,12 +93,19 @@ one-line pointer.
 
 ## Correlations worth keeping in mind
 
-- Q1 (storage) and Q3 (API Gateway type) interact: HTTP API's native JWT
-  authorizer means the Lambda can trust `sub` from the request context
-  without re-verifying the token — that `sub` is exactly the value used
-  as both the DynamoDB PK and the S3 key prefix, so getting the
-  authorizer wired correctly is what makes the app-code authorization
-  check in architecture.md §5 actually sound.
+- Q1 (storage) and Q3 (API Gateway type) interact: the `sub` claim is
+  exactly the value used as both the DynamoDB PK and the S3 key prefix, so
+  how it's established is what makes the authorization model in
+  architecture.md §5 sound.
+  **Correction (2026-08-24):** an earlier version of this bullet said the
+  authorizer means the Lambda "can trust `sub` from the request context
+  without re-verifying the token." That misdescribes what the code does and
+  would be dangerous to act on. The Lambda **does** re-verify, via
+  `micronaut-security-jwt`, and `CurrentUser.subOf()` reads
+  `authentication.getName()` from *that* verification — not from the
+  authorizer's request context. The two layers are deliberately
+  independent (defence in depth); don't "simplify" by removing the
+  in-Lambda one on the theory that the authorizer already covered it.
 - Q2 (independent secrets) and Q1 (DynamoDB `KEYS` item) interact: since
   KDF salts/params now live in DynamoDB rather than a second S3 object,
   changing the Master Password (independent of Cognito password) means

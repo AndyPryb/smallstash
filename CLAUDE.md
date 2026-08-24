@@ -26,10 +26,27 @@ itself. Full design: [docs/architecture.md](docs/architecture.md).
   commit you plan to amend away.** Treat anything pasted into chat the
   same way: if a real AWS secret key ever appears in a message, rotate it
   immediately rather than treat the leak as contained.
-- **Nothing is deployed to AWS yet.** `cdk bootstrap`/`cdk deploy` (or any
-  AWS-account-mutating command) needs explicit user confirmation before
-  running, every time — prior approval doesn't carry over to the next
-  session or the next deploy.
+- **The stack IS deployed** (since 2026-08-23 — an earlier version of this
+  line said otherwise and was wrong). `cdk bootstrap`/`cdk deploy`/`cdk
+  destroy` (or any AWS-account-mutating command) still needs explicit user
+  confirmation before running, **every time** — prior approval doesn't
+  carry over to the next deploy or the next session. Read-only AWS CLI
+  calls (`describe-*`, `get-*`, `list-*`) are fine without asking.
+- **No real secrets are stored yet, and one thing gates that.** All three
+  data resources are `RemovalPolicy.DESTROY` on purpose, so the
+  destroy/recreate loop stays cheap while this is pre-production. **Flip
+  them to `RETAIN` + deletion protection before the first real secret goes
+  in** — inline `!! MUST FLIP TO RETAIN !!` comments mark all three spots
+  in `SmallstashStack.java`. This matters more than it looks: the S3 vault
+  blob is versioned, but the DynamoDB `KEYS` item (the wrapped Vault Key)
+  is a single copy — lose it and every vault version becomes permanently
+  undecryptable.
+- **`cdk` commands need `SMALLSTASH_INVITE_CODE` set in the gitignored
+  repo-root `.env`.** Signup is invite-gated by a PreSignUp Lambda trigger,
+  and the synth **hard-fails** without a code rather than deploying an
+  ungated signup endpoint. If a synth dies with `No invite code
+  configured`, that's this — not a broken build. Never hardcode the value
+  in `SmallstashStack.java`, and never echo it into chat/tool output.
 - **Never run `git commit` (or `git push`) unless explicitly told to, for
   that specific change, right now.** Editing/writing files is fine on your
   own initiative; committing is not. An earlier "yes, commit" does **not**
@@ -77,16 +94,25 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   [docs/todo.md](docs/todo.md). Redeploying: `cd infra && cdk deploy` —
   the backend jar rebuilds automatically first, no manual `mvn package`
   needed (`cdk.json`'s app command does it).
-- PWA client (`web/`): **scaffolded 2026-08-23**, see
-  [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA; login
-  (Cognito SRP) + minimal vault CRUD work end-to-end against the live API.
-  `npm test` (22 tests, incl. Argon2id cross-checked against `@noble/hashes`
-  + an RFC 9106 vector) and `npm run build` both verified clean. Not yet
-  built: signup UI, password generator, offline-unlock UI, MFA UI. Hosting
-  for the built output (S3 + CloudFront, OAC-fronted) is now in
-  `infra/`'s `SmallstashStack` but **not deployed** — no public URL yet.
-  See [docs/todo.md](docs/todo.md) "PWA kickoff scaffold" / "PWA hosting"
-  for the full list.
+- ⚠️ **The repo is ahead of the deployed stack.** The Phase 0+1 security
+  work (2026-08-24, commit `725a7e0`) is committed and synth-verified but
+  **never deployed** — invite-gated signup, 512 KiB vault cap, S3 lifecycle
+  rule, DynamoDB PITR, reserved concurrency, conditional `PUT /keys`, log
+  retention + API access logging. Don't assume the live stack has any of
+  it. Same for the `javascript:` URL XSS fix (`45ccec5`), which needs a
+  frontend redeploy.
+- PWA client (`web/`): **built and deployed**, see
+  [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA on
+  S3 + CloudFront (OAC-fronted); login (Cognito SRP), signup, vault CRUD,
+  password generator, offline unlock, MFA UI, change-Master-Password, and
+  inactivity auto-lock all exist. `npm test` (**97 tests**, incl. Argon2id
+  cross-checked against `@noble/hashes` + an RFC 9106 vector) and
+  `npm run build` verified clean. Much of the UI has only ever been
+  verified by unit test + build, **not by a real browser run-through** —
+  see [docs/todo.md](docs/todo.md) for the per-feature list of what's
+  still manually unverified.
+- Not yet built anywhere: CSP / CloudFront security headers (Phase 2 of the
+  security review), CI, Svelte component tests.
 
 ## Where to look for what
 
@@ -95,6 +121,9 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 | Why S3 *and* DynamoDB, not just one? | [docs/decisions/0001-storage-s3-vs-dynamodb.md](docs/decisions/0001-storage-s3-vs-dynamodb.md) |
 | Full system design, cost model, data model | [docs/architecture.md](docs/architecture.md) |
 | What's deliberately deferred and why (WAF, VPC, etc.) | [docs/todo.md](docs/todo.md) |
+| Security review: findings, what's fixed, what's owed | [docs/todo.md](docs/todo.md) § "Security review 2026-08-24" |
+| Why WAF/fail2ban/CrowdSec aren't used here | [docs/todo.md](docs/todo.md) § "Brute-force / IP-blocking research" |
+| Threat model, auth/authorization mechanics, cost-abuse controls | [docs/architecture.md §4a/§4b/§5/§6](docs/architecture.md) |
 | What's still undecided | [docs/open-questions.md](docs/open-questions.md) |
 | "Explain X again" (SRP, JWKS, ...) for the user, not code-relevant | [docs/learning-notes/README.md](docs/learning-notes/README.md) (gitignored) |
 
@@ -105,11 +134,28 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 mvn -DskipTests package        # produces target/smallstash-0.1.jar - infra/ points at this
 mvn test                       # full LocalStack-backed integration tests
 
+# Frontend: test + build (from web/)
+npm test                       # 97 tests, node:test, no browser needed
+npm run build                  # must run before `cdk deploy` - CDK uploads web/dist
+
 # Infra: compile + local synth (no AWS calls, no credentials needed)
 cd infra
-../mvnw compile exec:java      # equivalent to `cdk synth` without the CLI installed
+CDK_OUTDIR=cdk.out ../mvnw compile exec:java   # `cdk synth` without the CLI
 # Real cdk CLI (once installed) run from infra/: cdk bootstrap / cdk deploy / cdk diff
 ```
+
+- **`CDK_OUTDIR` is load-bearing for the local synth.** Without it the
+  command "succeeds" but silently writes no `cdk.out/`, so there's nothing
+  to inspect and it looks like it worked.
+- **The synth needs `SMALLSTASH_INVITE_CODE` in the repo-root `.env`** (see
+  the constraint above). `No invite code configured` is that, not a broken
+  build.
+- **Verify the synthesized template, don't just trust the CDK source.**
+  Reading `cdk.out/SmallstashStack.template.json` is how several claims in
+  this repo turned out to be wrong — e.g. `autoDeleteObjects` silently
+  defeating a `RETAIN` policy. `DeletionPolicy`, `LifecycleConfiguration`,
+  `PointInTimeRecoverySpecification`, and `LambdaConfig` are all worth
+  eyeballing after touching them.
 
 - AWS CLI default profile is `smallstash-deployer` (a dedicated IAM user,
   not root/personal — see `infra/scripts/create-deployer-user.sh`),
@@ -123,6 +169,21 @@ cd infra
 
 ## Working agreements (learned this session, keep applying them)
 
+- **Security claims especially need verifying, not asserting.** Several
+  plausible-sounding "facts" turned out to be wrong when checked during the
+  2026-08-24 review: AWS WAF can't attach to an API Gateway HTTP API (v2)
+  at all; WAF's ATP/ACFP rule groups are forbidden on Cognito user pools;
+  Cognito's failed-login lockout exists but is **not configurable**; WAF
+  rate-based rules have a 100-request floor, so "block after 10 failures"
+  is impossible to express. Check the docs before recommending a control —
+  a security recommendation that can't actually be implemented wastes more
+  time than admitting uncertainty.
+- **Distinguish identifiers from credentials.** The Cognito pool id and
+  client id are published in the PWA's `config.json` on purpose and are in
+  the JS bundle regardless — hiding them fixes nothing. When something
+  looks like an exposure, check whether it's actually secret before
+  proposing to hide it, and fix the real control instead (here: gating
+  registration).
 - Verify library/framework API claims against real sources (compile it,
   or search docs) rather than asserting from training-data memory —
   several Micronaut AWS and CDK Java specifics turned out to have moved
