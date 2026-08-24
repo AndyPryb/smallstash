@@ -67,31 +67,28 @@ of leaving them stale.
         architecture.md section once this research is done - this bullet
         list is a starting point, not the final scope.
 
-## Full teardown capability - `destroyData` context flag (2026-08-23)
+## Full teardown capability - now always DESTROY (2026-08-24)
 
-`SmallstashStack.java` reads a CDK context flag to decide the
-`RemovalPolicy` on the 3 data-bearing resources (S3 vault bucket,
-DynamoDB table, Cognito pool) - **defaults to `RETAIN` (safe)**, only
-switches to `DESTROY` (+ `autoDeleteObjects` on the bucket) when passed
-explicitly:
+`SmallstashStack.java` used to read a `destroyData` CDK context flag to
+decide the `RemovalPolicy` on the 3 data-bearing resources (S3 vault
+bucket, DynamoDB table, Cognito pool), defaulting to `RETAIN`. That flag
+was removed - the account is currently 100% dev/test with no real user
+data, so `dataRemovalPolicy` is now hardcoded to `RemovalPolicy.DESTROY`
+(+ `autoDeleteObjects(true)` on the bucket) unconditionally. `cdk destroy`
+now tears down everything cleanly in one command, with no orphaned
+S3/DynamoDB/Cognito resources left behind to hunt down and clean up by
+hand (see the RETAIN-vs-orphan discussion this replaced, earlier in this
+file's history/git log if needed).
 
-```bash
-cdk deploy -c destroyData=true   # bakes DeletionPolicy=Delete into the
-                                  # resources from creation
-cdk destroy                      # from then on, deletes everything in
-                                  # one command - no flag needed again,
-                                  # CloudFormation remembers the policy
-                                  # from the last deploy, not fresh code
-```
+Verified with a local synth that `DeletionPolicy: Delete` is now baked
+into all three resources unconditionally, not just assumed from the code.
 
-Verified both directions actually change `DeletionPolicy` in the
-synthesized template (`Retain` by default, `Delete` with the flag) -
-not just assumed from the code.
-
-- [ ] **Flip back to the safe default (redeploy without the flag) before
-      this ever holds real, non-test data.** Not automatic - has to be a
-      deliberate `cdk deploy` (no `-c destroyData=true`) to restore
-      `RETAIN` once it matters. Easy to forget since nothing forces it.
+- [ ] **Reintroduce a RETAIN safety net before real, non-test data ever
+      lands here.** Either hardcode `RemovalPolicy.RETAIN` back, or restore
+      the old context-flag pattern (`destroyData` defaulting to `RETAIN`,
+      opt-in `DESTROY`) if occasional full-teardown convenience is still
+      wanted alongside the safety net. Nothing currently forces this switch
+      to happen - it's a manual code change before the first real signup.
 
 ## What's built
 
