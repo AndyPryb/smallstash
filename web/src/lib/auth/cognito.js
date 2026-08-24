@@ -1,6 +1,7 @@
 import {
   CognitoUserPool,
   CognitoUser,
+  CognitoUserAttribute,
   AuthenticationDetails,
 } from 'amazon-cognito-identity-js';
 
@@ -73,16 +74,28 @@ export function signIn({ userPoolId, clientId, email, password }) {
  * docs/architecture.md §9's note on why the manual test user isn't the real
  * flow). Cognito emails a verification code; confirm it with confirmSignUp.
  *
+ * Registration is gated by an invite code: it travels as Cognito's
+ * `validationData`, which exists precisely for passing extra data to a
+ * trigger without storing it on the user. The PreSignUp Lambda
+ * (infra/.../SmallstashStack.java) checks it and rejects the sign-up if it
+ * doesn't match, so an invalid code means no account is ever created. It is
+ * NOT a user attribute - nothing about it is persisted on the account after
+ * this call.
+ *
  * @param {object} args
  * @param {string} args.userPoolId
  * @param {string} args.clientId
  * @param {string} args.email
  * @param {string} args.password
+ * @param {string} args.inviteCode
  */
-export function signUp({ userPoolId, clientId, email, password }) {
+export function signUp({ userPoolId, clientId, email, password, inviteCode }) {
   const userPool = getPool({ userPoolId, clientId });
+  const validationData = [
+    new CognitoUserAttribute({ Name: 'inviteCode', Value: inviteCode }),
+  ];
   return new Promise((resolve, reject) => {
-    userPool.signUp(email, password, [], null, (err, result) => {
+    userPool.signUp(email, password, [], validationData, (err, result) => {
       if (err) reject(err);
       else resolve(result);
     });

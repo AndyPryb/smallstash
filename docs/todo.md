@@ -4,14 +4,43 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
-## UI theming nod to the name's origin (2026-08-24)
+## Export secrets feature (2026-08-24)
+
+Idea: let a user export their vault entries (e.g. to a file) - raised in
+conversation only, not scoped yet.
+
+- [ ] **Design and implement a vault export feature.** Open questions to
+      settle first: export format (plain JSON? CSV? an encrypted file the
+      user could re-import elsewhere?), whether the export is plaintext
+      once decrypted client-side (a real exposure point - the file leaving
+      the browser in cleartext is a deliberate hole in the zero-knowledge
+      model that needs the user to understand what they're doing, e.g. a
+      confirmation dialog), and what's in scope (all fields including
+      Notes/attachments if the document feature above ever lands, or just
+      the core fields).
+## UI theming nod to the name's origin - done (2026-08-24)
 
 "smallStash" was inspired by the "Small Stash" storage item from the game
-Rust. Not scoped or designed yet - just captured so it isn't lost.
+Rust ([wiki.facepunch.com/rust/item/stash.small](https://wiki.facepunch.com/rust/item/stash.small) -
+a hidden, buried cloth pouch you dig up to retrieve your loot).
 
-- [ ] **Explore a UI design pass referencing the Rust "Small Stash" item**
-      (its look/iconography/palette) as a nod to the name's origin -
-      purely cosmetic, no functional requirements attached.
+Went with the "full illustrated nod" option, then simplified: first pass
+had `web/public/icon.svg`/`icon-maskable.svg` show a tan pouch tied with
+rope, half-buried in a dirt mound, with a small teal keyhole accent (a
+holdover from the old plain-padlock icon). The dirt mound read as
+cluttered/unclear at actual favicon size, so the tab/PWA icon was
+simplified to just the tied pouch (no mound, no keyhole) - the same
+glyph `App.svelte`'s header `<h1>` already showed next to the "Small
+Stash" text, now kept in sync between the two rather than being two
+different designs. Header glyph still has its hover tooltip explaining
+the reference. Deliberately did **not** touch functional/error copy
+elsewhere (offline banner, lock messages, etc.) - kept the nod contained
+to the icon/logo mark rather than sprinkling "buried" language through
+security-critical text where clarity matters more than a joke.
+
+Verified via headless-browser screenshot (both the full `/icon.svg` and
+the header glyph render as intended, no console errors); `npm test`
+90/90, `npm run build` clean.
 
 ## Document/attachment feature for secrets entries - requirements unclear (2026-08-24)
 
@@ -169,6 +198,341 @@ trust boundary) but worth a pass for correctness/quality.
         architecture.md section once this research is done - this bullet
         list is a starting point, not the final scope.
 
+## Security review 2026-08-24 - decisions made, not yet implemented
+
+Full review (AWS-account-level checks against the live stack + code read)
+found H-1 (open self-signup + published Cognito IDs let anyone register),
+H-2 (unbounded S3 version growth, no size limit, no per-user quota - a
+cost-abuse vector), H-3 (all data resources are DESTROY with no PITR - one
+`cdk destroy` or bad CFN update permanently loses every vault), plus
+several medium/low items (no CSP/security headers, MFA optional, user
+enumeration via `InitiateAuth`, no access logging). Decisions made so far,
+to implement together as one pass:
+
+- [x] **Close self-signup, replace with PreSignUp Lambda trigger + invite
+      code** (implemented 2026-08-24, **not deployed**).
+      `selfSignUpEnabled(false)` is *not* the plan - instead, a
+      small second Lambda wired via `userPool.addTrigger(...)`, invoked by
+      Cognito's PreSignUp event before account creation. The client passes
+      an invite-code field as `validationData` on the `SignUp` call
+      (Cognito's real, purpose-built passthrough for this - only `SignUp`/
+      `AdminCreateUser` forward `validationData` to the trigger); the
+      trigger checks it against a hardcoded `INVITE_CODE` env var and
+      rejects account creation if it doesn't match. Chosen over
+      `admin-create-user`-only onboarding because it lets a small number
+      of trusted people (family/friends) self-register with a code you
+      hand them, without you running a CLI command per person.
+      **Nuance to remember**: if `INVITE_CODE` is ever rotated by editing
+      the Lambda's env var directly (console or `aws lambda
+      update-function-configuration`) rather than in the CDK source, the
+      *next* `cdk deploy` silently overwrites it back to whatever's
+      hardcoded in `SmallstashStack.java` - CDK treats environment
+      variables as the full declarative set, not a diff. Rotate it in the
+      CDK source and redeploy as the normal path; console/CLI rotation is
+      only for "kill the current code immediately, can't wait for a
+      build" and must be followed by updating the source to match before
+      the next deploy, or the rotation silently reverts.
+      **Where the code actually lives**: the trigger is an inline Node
+      function in `SmallstashStack.java` (`PreSignUpFunction`, ~20 lines,
+      no separate Maven module - a Java Lambda's cold start would add
+      seconds to every signup for nothing). Client side, the code travels
+      as Cognito `validationData` (`web/src/lib/auth/cognito.js`'s
+      `signUp`), threaded through `session.js`'s `registerAccount` from a
+      new "Invite code" field in `SignupForm.svelte`. It is *not* a user
+      attribute - nothing about it persists on the account.
+      **Where the code value lives**: `SMALLSTASH_INVITE_CODE` in the
+      repo-root `.env` (gitignored; `.env.example` carries the key blank as
+      a template). `SmallstashStack.resolveInviteCode()` parses `.env`
+      directly at synth time - CDK doesn't read `.env` itself - so a plain
+      `cdk deploy` works with no extra flags. Precedence: CDK context
+      (`-c inviteCode=<value>`) > `SMALLSTASH_INVITE_CODE` env var > `.env`
+      > **hard failure**. Deliberately not hardcoded in
+      `SmallstashStack.java`: that would commit a shared secret to git,
+      which CLAUDE.md forbids. The hard failure is also deliberate - a
+      default invite code shipping by accident would silently reopen the
+      exact hole this mechanism exists to close.
+      `PreSignUp_AdminCreateUser` is deliberately let through untouched so
+      `admin-create-user` still works as a manual fallback (it can't send
+      `validationData`, and already requires IAM credentials).
+- [ ] **RemovalPolicy.RETAIN + deletion protection** on the vault bucket,
+      users table, and Cognito pool - **implemented then deliberately
+      reverted on 2026-08-24, still owed.** RETAIN makes the frequent
+      pre-production destroy/recreate loop painful (a retained
+      `smallstash-users` breaks the *next* deploy outright, since the table
+      name is fixed), and no real secrets are stored yet, so DESTROY stays
+      for now. **This is the single most important item to flip before the
+      first real secret is stored.** What to change, all in
+      `SmallstashStack.java` and each marked with an inline comment there:
+      `dataRemovalPolicy` -> `RemovalPolicy.RETAIN`, drop
+      `.autoDeleteObjects(true)` from `VaultBucket` (it provisions a custom
+      resource whose whole job is emptying the bucket on stack delete - it
+      would defeat RETAIN, and it's only there now because a versioned
+      bucket can't be deleted while versions remain), and add
+      `.deletionProtection(true)` to both the table and the user pool.
+      `SiteBucket` stays DESTROY/auto-delete either way - disposable build
+      output, not user data. (Verified both directions synth correctly
+      before reverting.)
+- [x] **S3 lifecycle rule** on the vault bucket (implemented 2026-08-24,
+      **not deployed**): `NoncurrentVersionExpiration` 90 days with
+      `NewerNoncurrentVersions: 3`, plus
+      `AbortIncompleteMultipartUpload` after 7 days. Verified in the
+      synthesized template.
+- [x] **512 KiB ciphertext size limit** on `PUT /vault` (implemented
+      2026-08-24, **not deployed**). Set to 512 KiB rather than the 1 MiB
+      first tried - a realistic vault is single-digit kilobytes, so this is
+      still ~100x headroom while bounding the worst case an order of
+      magnitude tighter. `VaultController.MAX_CIPHERTEXT_BYTES` checks the
+      Base64 length first (rejects without allocating the decoded array)
+      then the decoded byte count as the authoritative check;
+      `micronaut.server.max-request-size=1MB` is the second layer (room for
+      a max-size vault's ~700KB Base64 expansion plus its JSON envelope).
+      Also fixed the unhandled-500 path this touched: a malformed Base64
+      body used to throw `IllegalArgumentException` out of the controller
+      as a 500, now a deliberate 400; oversized is 413. Client mirrors the
+      limit in `policy.js`'s `MAX_VAULT_CIPHERTEXT_BYTES`/
+      `validateVaultSize`, called from `api/client.js`'s `putVault` so an
+      oversized vault fails with a readable message instead of uploading
+      the whole thing to earn a bare 413 - UX only, the backend check is
+      the real enforcement. **Keep the two constants in sync by hand** -
+      nothing enforces that today.
+- [ ] **Per-field input limits in the vault UI** (raised 2026-08-24, not
+      implemented). The 512 KiB ceiling above is a whole-vault limit, so
+      the way a normal user would realistically hit it is one enormous
+      Notes field - and the failure would surface as "your entire vault
+      won't save" with no clue which entry caused it. A `maxlength` on the
+      Notes textarea (say 10-20 KB) plus something modest on
+      title/username/URL would turn that into immediate, local feedback.
+      Worth being clear this is **UX, not a security control**: the vault
+      is encrypted client-side, so the backend cannot see or enforce
+      anything about individual fields - the whole-blob size limit is the
+      only real enforcement point, and it already exists. Fold into the
+      already-tracked "UI input validation review" item below rather than
+      doing it standalone.
+- [x] **Enable DynamoDB PITR** on `smallstash-users` (implemented
+      2026-08-24, **not deployed**) - cheap (~$0.20/GB-month, table is
+      currently ~0 bytes), and it's the difference between "recoverable"
+      and "every vault permanently undecryptable" if the KEYS item
+      (wrapped Vault Key) is ever lost - unlike the S3 vault blob, that
+      item has no versioning today. Uses
+      `pointInTimeRecoverySpecification` (the non-deprecated form).
+      Verified in the synthesized template.
+- [ ] **AWS Budgets Action: "blunt kill switch" on cost-threshold breach**
+      (chosen over the narrower "deny writes only, keep reads" option -
+      full outage acceptable for a personal app, simplicity preferred over
+      graceful degradation). Implementation detail worth getting right:
+      attach the Deny policy to the **Lambda's execution role**
+      (`BackendFunctionServiceRole...`), not `smallstash-deployer` -
+      `smallstash-deployer` is the local/deploy identity, never in the
+      live request path, so denying it would do nothing to stop
+      traffic-driven cost. Deny `s3:*`/`dynamodb:*` on the execution role
+      (not `lambda:InvokeFunction` - that permission lives on a *resource*
+      policy granted to API Gateway, not the execution role's own
+      identity policy, so denying it there wouldn't block invocation
+      anyway). Denying the data-plane actions breaks every vault
+      read/write for all users, which is the intended full-stop, while
+      root and `smallstash-deployer` stay untouched so investigation/
+      recovery is immediate. **Explicitly not** `reservedConcurrentExecutions:
+      0` - AWS Budgets Actions natively support only "apply an IAM/SCP
+      policy" or "stop specific EC2/RDS instances," not a Lambda
+      concurrency change; achieving that would need a separate custom
+      remediation (a CloudWatch alarm triggering another Lambda that calls
+      the concurrency API) - more moving parts, another privileged Lambda
+      as new attack surface, for a personal project where the native
+      IAM-Deny option already achieves the same practical outcome.
+- [ ] **CloudFront `ResponseHeadersPolicy.SECURITY_HEADERS`** (managed
+      policy - HSTS, X-Frame-Options, X-Content-Type-Options,
+      Referrer-Policy) plus a **custom CSP** on top (the managed policy
+      doesn't include one). Must include `'wasm-unsafe-eval'` in
+      `script-src` - `hash-wasm`'s Argon2id runs as WebAssembly and will
+      silently break without it. **Rollout plan, not a paper policy**:
+      ship first as `Content-Security-Policy-Report-Only` (logs violations,
+      doesn't block), exercise the full app (login, signup, vault CRUD,
+      MFA, offline unlock) watching the browser console/report endpoint
+      for violations neither reading the source nor guessing could catch
+      (an overlooked font/icon reference, a Cognito endpoint not in
+      `connect-src`, etc.), then flip to enforcing once a real session
+      produces zero violations.
+- [ ] **Mandatory MFA** (`Mfa.REQUIRED`) - UI (`MfaCodeForm.svelte`)
+      already exists.
+- [ ] **`preventUserExistenceErrors: true`** on the user pool client -
+      closes the confirmed-live user-enumeration gap (unauthenticated
+      `InitiateAuth` against a nonexistent email currently returns
+      `UserNotFoundException` rather than a generic error).
+- [ ] **Cognito Plus tier (Threat Protection)** - compromised-credential
+      detection (login password checked against known-breach corpora) +
+      risk-based adaptive auth (IP-reputation/device signal scoring on
+      sign-in) + exportable auth event logs. $0.02/MAU, no free tier -
+      confirmed ~$0.40/month at 20 users. **Approved (2026-08-24)** - the
+      one recurring paid item in this list, explicitly signed off on given
+      the low cost. Plan-tier bump on the user pool itself (`UserPoolTier`
+      Essentials -> Plus), not just a CDK flag.
+- [ ] **Before any of the above ships**: confirm `LoginForm.svelte`
+      handles Cognito's `NEW_PASSWORD_REQUIRED` challenge - currently
+      unverified, and relevant if `admin-create-user` is ever used as a
+      manual fallback alongside the invite-code flow. (Known: `cognito.js`'s
+      `signIn` currently *rejects* on `newPasswordRequired` with a generic
+      error rather than driving a set-new-password step, so an
+      admin-created user can't complete first login through the PWA today.)
+
+### Phase 0 deploy notes (read before the next `cdk deploy`)
+
+- **`cdk destroy` still works as before** - RETAIN was reverted (see above),
+  so the destroy/recreate loop is unchanged. This is *only* true while
+  there are no real secrets; flipping to RETAIN is the gate on storing
+  them.
+- **`SMALLSTASH_INVITE_CODE` must be set in `.env` first.** It's currently
+  blank - deliberately, secrets don't get written by an AI session. `cdk
+  deploy` fails fast at synth with an explanatory error until it's filled
+  in, rather than deploying an ungated signup endpoint. Pick something
+  long and random.
+- **Not yet verified end-to-end**: the PreSignUp trigger has only been
+  verified structurally (synthesized template shows the `LambdaConfig
+  PreSignUp` wiring and the `cognito-idp.amazonaws.com`
+  `lambda:InvokeFunction` permission). The actual reject-on-wrong-code and
+  accept-on-right-code behaviour is untested against a live pool - worth a
+  manual run-through of both paths on first deploy, since a trigger that
+  throws on *every* signup and one that silently lets everything through
+  look identical from the CDK template.
+
+- [ ] **XSS hardening beyond CSP** (CSP is the primary lever - see above -
+      but layer these too, since CSP mitigates delivery, not every
+      injection path):
+      - Grep `web/src` to confirm Svelte's `{@html ...}` directive is
+        never used on anything derived from vault entry data
+        (title/username/URL/notes) - `{expression}` auto-escapes,
+        `{@html}` deliberately opts out and is the most common way a
+        Svelte app introduces XSS.
+      - Reject non-`http(s)` schemes on the entry `url` field before
+        rendering it as a clickable link (extends the existing
+        scheme-less-URL fix in `EntryListItem.svelte` - a saved
+        `javascript:...` URL would otherwise execute on click).
+      - `npm audit` + Dependabot as a standing/recurring check, not a
+        one-time pass - the real crown-jewel dependencies are
+        `hash-wasm`/`@noble/hashes`; a compromised transitive dependency
+        is a more realistic path in than a novel XSS in first-party code.
+      - Confirm the Master Key/session key material never touches
+        `localStorage`/`sessionStorage` (in-memory only) - believed true
+        from the architecture doc's description of `session.js`, worth an
+        explicit check rather than assumption.
+      - Trusted Types (`require-trusted-types-for 'script'` CSP directive)
+        considered and deliberately skipped for now - strongest available
+        DOM-XSS defense, but more setup/browser-support fiddling than a
+        20-user app needs; revisit only if the CSP rollout turns up a
+        specific gap that warrants it.
+
+### Brute-force / IP-blocking research (2026-08-24) - mostly already covered
+
+Asked whether we can "lock after 10 failed passwords and block the IP", and
+whether fail2ban / CrowdSec / endlessh-go apply. Findings, so this isn't
+re-researched later:
+
+- **Cognito already does per-user lockout, automatically and for free.**
+  After 5 failed password attempts it locks the user for `2^(n-5)` seconds
+  (n = cumulative failures), escalating to a ~15 minute cap. Resets on a
+  successful sign-in, or after 15 minutes with no attempts. Same escalation
+  applies to failed MFA code attempts. **It is not configurable** - "make it
+  10 attempts" isn't a setting that exists. It's also per-user, not per-IP,
+  so it blunts credential-stuffing against one account but not spraying one
+  password across many accounts.
+- **AWS WAF rate-based rules can't express "10 failures".** They count
+  *requests* per IP over a 5-minute window and cannot distinguish a failed
+  sign-in from a successful one, and the **minimum threshold is 100
+  requests / 5 min** - so a 10-attempt rule is impossible by construction.
+  Still useful as a volumetric backstop (a real brute-forcer makes
+  thousands of requests), just not as a precise lockout.
+- **WAF's purpose-built credential-stuffing rule groups are unavailable
+  here.** `AWSManagedRulesATPRuleSet` (account takeover prevention) and
+  `AWSManagedRulesACFPRuleSet` (account creation fraud prevention) are
+  exactly the "detect credential stuffing / fake signups" rulesets, and AWS
+  explicitly **forbids associating a web ACL containing either with a
+  Cognito user pool**. So WAF-on-Cognito gets you rate limiting and IP
+  reputation, not ATP.
+- **Cognito Threat Protection (Plus tier, already approved above) is the
+  right tool** and covers most of what was actually wanted: compromised
+  -credential detection (the login password checked against known-breach
+  corpora - directly the "retrying a compromised passwords database"
+  scenario) plus risk-based adaptive auth that scores IP reputation and
+  device signals and can block or force step-up MFA. ~$0.40/month at 20
+  users.
+- **fail2ban / CrowdSec / endlessh-go: none apply.** All three assume a
+  long-lived host you control. fail2ban tails log files and writes
+  iptables/nftables rules - there is no host and no firewall in a
+  Lambda/API Gateway/Cognito stack. CrowdSec is the same shape (agent parses
+  logs, "bouncers" enforce), and while it does ship an AWS WAF bouncer,
+  running the agent means paying for an always-on EC2/container - which
+  contradicts the near-zero-idle-cost constraint, to enforce a blocklist AWS
+  already sells as a managed rule group (`AWSManagedRulesAmazonIpReputationList`).
+  endlessh-go is an **SSH tarpit**; there is no SSH anywhere in this
+  architecture. The generalizable idea behind CrowdSec - a crowd-sourced
+  known-bad-IP feed - maps onto AWS's managed IP reputation list and
+  Cognito Threat Protection, both of which are already in this plan.
+- **Net: no new work item.** Cognito's built-in lockout + Threat Protection
+  + the existing API Gateway throttle cover this. WAF stays deferred (see
+  "Deferred" below) - it can't do the precise thing that was wanted, and
+  the ~$7-8/month baseline is disproportionate here.
+
+### Phase 1 - implemented 2026-08-24, not deployed
+
+- [x] **Lambda `reservedConcurrentExecutions(5)`** - hard ceiling on
+      concurrent execution, the cost control the API Gateway throttle
+      can't be (throttling caps requests/second; concurrency caps how many
+      run at once, which is what actually bounds GB-seconds if something
+      gets past the throttle).
+- [x] **Conditional write on `PUT /keys`.** `saveKeys` now writes with
+      `attribute_not_exists(pk) OR #kv < :newKeyVersion`, so a stale or
+      replayed write can't clobber newer key material. A rejected write
+      raises `KeyVersionConflictException` -> **HTTP 409** (new
+      `KeyVersionConflictExceptionHandler`, following the existing
+      `ResourceNotFound` pattern). Guards the single most destructive
+      write in the system: the KEYS item is the only copy of the wrapped
+      Vault Key, and overwriting it with material from a different Master
+      Password makes every vault version - current *and* historical -
+      permanently undecryptable.
+      **Required a client change, done**: `keyVersion` is unix-seconds
+      from the local clock, so a device whose clock lagged the last writer
+      (or two changes inside the same second) would produce a version the
+      backend now rejects - leaving that device permanently unable to
+      change its Master Password. `nextKeyVersion(previousKeyVersion)` in
+      `crypto/vault.js` now returns
+      `max(nowSeconds, previousKeyVersion + 1)`;
+      `rewrapWithNewMasterPassword` takes `previousKeyVersion` and
+      `session.js`'s `changeMasterPassword` passes the version it already
+      fetched. Two new tests cover the clock-skew and normal cases (92
+      frontend tests, up from 90).
+- [x] **Log retention (30 days)** on an explicit `LogGroup` for the Lambda
+      (CDK's implicit one never expires) **and API Gateway access logging**
+      to its own 30-day group. Access logs record source IP, time, method,
+      route, status, response length, request id, and authorizer error -
+      **deliberately no request/response bodies**: they're ciphertext, but
+      logging them would put vault contents in CloudWatch for no benefit.
+      This is the only place a wave of 401s (the actual signal that someone
+      is probing) becomes visible - the Lambda's own logs start *after* the
+      JWT authorizer has already accepted or rejected. `accessLogSettings`
+      has no L2 property on `HttpStage` yet, so it's set through the
+      underlying `CfnStage`.
+
+- [ ] **`storageBytesUsed` quota enforcement - reconsidered and
+      deliberately dropped from Phase 1.** It was on the plan as a
+      cost-abuse backstop, but that reasoning no longer holds now that the
+      other two controls are in: with one blob per user, per-user storage
+      *is* the blob size, which is already capped at 512 KiB by
+      `VaultController.MAX_CIPHERTEXT_BYTES`, and the S3 lifecycle rule
+      bounds retained noncurrent versions at 3. Worst case per user is
+      therefore ~4 x 512 KiB = ~2 MB, and signup is invite-gated, so total
+      storage is bounded at (invited users) x 2 MB regardless. Adding
+      quota tracking would mean `VaultController` taking a dependency on
+      `UserKeysRepository` - crossing a package boundary the design keeps
+      separate on purpose - to enforce a limit that's already enforced
+      twice over. Still worth doing eventually as *displayed information*
+      if `GET /profile` ever gets built; tracked in the "Profile feature"
+      section below, not here.
+
+Also noted but not yet decided: dropping `localhost:5173` from prod CORS,
+trimming the Lambda's S3/DynamoDB grants to exclude delete actions it never
+uses, shortening the 30-day refresh token TTL, and validating `iss`/`aud`/
+`token_use` claims in the in-Lambda JWT check (verify exact Micronaut 5.1
+property names against the docs before implementing, not from memory).
+
 ## Full teardown capability - now always DESTROY (2026-08-24)
 
 `SmallstashStack.java` used to read a `destroyData` CDK context flag to
@@ -227,17 +591,31 @@ assumed from the code:
       exists with `MfaConfiguration: OPTIONAL` as designed.
 
 Live stack outputs (account `<aws-account-id>`, region `eu-west-1`) - **updated
-2026-08-24 after a `cdk deploy` with the always-DESTROY policy (see "Full
-teardown capability" above) — every ID below is new again, the ones from
-the previous deploy no longer exist**. This deploy also added CloudFront
-hosting for the PWA (`SiteUrl`) - verified post-deploy: `SiteUrl` serves
-`index.html` (200, CloudFront cache miss/hit both checked), a deep
-client-side route (`/vault/entry/42`) correctly rewrites to `index.html`
-(200, not a raw S3 404), the built JS bundle/manifest/service worker all
-load, direct S3 access to both `SiteBucket` and `VaultBucket` returns 403
-(OAC is doing its job, no public bypass), `GET /vault` unauthenticated
-still 401s, and a CORS preflight from the `SiteUrl` origin against
-`ApiUrl` succeeds (`access-control-allow-origin` echoes it back):
+2026-08-24, after at least one more destroy/deploy cycle past the
+previous entry below (the always-DESTROY policy means every ID changes
+on each full cycle - see "Full teardown capability" above). Confirmed
+directly via `aws cloudformation describe-stacks`, not assumed from
+`.env`** - `.env` itself had drifted out of sync with the live stack
+(`API_BASE_URL` pointed at a dead, deleted API Gateway - DNS didn't even
+resolve - which is what a "Failed to fetch" / "you're offline" error in
+local dev turned out to be, not a real connectivity problem):
+```
+ApiUrl            = https://<api-id>.execute-api.eu-west-1.amazonaws.com
+SiteUrl           = https://<distribution-id>.cloudfront.net
+UserPoolId        = eu-west-1_<pool-id>
+UserPoolClientId  = 26dt3ssngkenbj8kq66c8eanrn
+VaultBucketName   = smallstashstack-vaultbucket95cbf29a-1qobdurmi9gc
+SiteBucketName    = smallstashstack-sitebucket397a1860-ayivkugarcbb
+```
+`.env` at the repo root updated to match (gitignored, not shown here).
+**Reminder for next time this happens**: `.env` doesn't auto-update on
+redeploy - if local dev suddenly can't reach the API/Cognito, check
+`.env` against `aws cloudformation describe-stacks --stack-name
+SmallstashStack --query "Stacks[0].Outputs"` before assuming a real
+network problem.
+
+Previous outputs (now stale, kept only as a record - every value below
+stopped resolving once the stack above was destroyed):
 ```
 ApiUrl            = https://<api-id>.execute-api.eu-west-1.amazonaws.com
 SiteUrl           = https://<distribution-id>.cloudfront.net
@@ -246,7 +624,6 @@ UserPoolClientId  = 7g2krg0h01l25ud3eqqkh1sb17
 VaultBucketName   = smallstashstack-vaultbucket95cbf29a-gjcce2ynr0zz
 SiteBucketName    = smallstashstack-sitebucket397a1860-qqtuwnnfao9m
 ```
-`.env` at the repo root updated to match (gitignored, not shown here).
 
 ## Manual test user (2026-08-23) — stand-in, not the real signup flow
 

@@ -15,6 +15,31 @@
 export const MIN_MASTER_PASSWORD_LENGTH = 4;
 
 /**
+ * Mirrors the backend's own ceiling (VaultController.MAX_CIPHERTEXT_BYTES,
+ * 512 KiB) so an oversized vault fails with a clear message here instead of a
+ * bare 413 after uploading the whole thing. The backend check is the real
+ * enforcement - this is UX, same as the login password pattern check in
+ * SignupForm. Keep the two in sync.
+ */
+export const MAX_VAULT_CIPHERTEXT_BYTES = 512 * 1024;
+
+/**
+ * @param {string} ciphertextBase64
+ * @returns {string | null} an error message, or null if acceptable
+ */
+export function validateVaultSize(ciphertextBase64) {
+  // Base64 is 4 characters per 3 bytes; derive the decoded size rather than
+  // measuring the encoded string, so this compares like-for-like with the
+  // backend's byte-count check.
+  const padding = ciphertextBase64.endsWith('==') ? 2 : ciphertextBase64.endsWith('=') ? 1 : 0;
+  const decodedBytes = (ciphertextBase64.length / 4) * 3 - padding;
+  if (decodedBytes > MAX_VAULT_CIPHERTEXT_BYTES) {
+    return `Vault is too large to save (over ${MAX_VAULT_CIPHERTEXT_BYTES / 1024} KiB encrypted). Remove some entries or large notes and try again.`;
+  }
+  return null;
+}
+
+/**
  * @param {string} masterPassword
  * @returns {string | null} an error message, or null if acceptable
  */

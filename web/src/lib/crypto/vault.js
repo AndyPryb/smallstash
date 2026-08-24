@@ -129,12 +129,16 @@ export async function unlockWithRecoveryKey(userKeys, recoveryKeyInput) {
  * @param {Uint8Array} args.vaultKey the already-unwrapped Vault Key
  * @param {string} args.newMasterPassword
  * @param {string} args.recoveryKeyInput current Recovery Key, re-wrapped as-is
+ * @param {number} [args.previousKeyVersion] the currently-stored keyVersion,
+ *   so the new one is guaranteed to be greater - `PUT /keys` rejects anything
+ *   that isn't (see nextKeyVersion)
  * @returns {Promise<UserKeys>}
  */
 export async function rewrapWithNewMasterPassword({
   vaultKey,
   newMasterPassword,
   recoveryKeyInput,
+  previousKeyVersion,
 }) {
   const salt = randomBytes(SALT_LENGTH);
   const recoveryBytes = parseRecoveryKey(recoveryKeyInput);
@@ -147,7 +151,7 @@ export async function rewrapWithNewMasterPassword({
     ...DEFAULT_KDF_PARAMS,
     wrappedVaultKeyByMaster: toBase64(await seal(masterKey, vaultKey)),
     wrappedVaultKeyByRecovery: toBase64(await seal(recoveryWrapKey, vaultKey)),
-    keyVersion: nextKeyVersion(),
+    keyVersion: nextKeyVersion(previousKeyVersion),
   };
 
   wipe(masterKey);
@@ -186,9 +190,19 @@ export async function decryptVault(vaultKey, ciphertextBase64) {
  * Unix *seconds*, not milliseconds: keyVersion is an `int` backend-side
  * (UserKeys.java) and ms-epoch overflows 32 bits. Same reasoning as the note
  * in tests/api/keys.test.js.
+ *
+ * `PUT /keys` is conditional on the new version being strictly greater than
+ * the stored one (DynamoDbUserKeysRepository.saveKeys), so a bare clock read
+ * isn't enough: a device whose clock is behind the one that wrote last - or
+ * two changes inside the same second - would produce a version the backend
+ * rejects, leaving that device permanently unable to change its Master
+ * Password. Stepping past the previous version keeps it monotonic regardless
+ * of clock skew, while still being wall-clock-ish in the normal case.
+ *
+ * @param {number} [previousKeyVersion] the currently-stored version, if any
  */
-function nextKeyVersion() {
-  return Math.floor(Date.now() / 1000);
+function nextKeyVersion(previousKeyVersion = 0) {
+  return Math.max(Math.floor(Date.now() / 1000), (previousKeyVersion ?? 0) + 1);
 }
 
 /** Wrong Master Password / Recovery Key - expected, user-correctable. */

@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { validateVaultSize } from '../policy.js';
 
 /**
  * Thin fetch wrapper against the deployed HTTP API - same shape as
@@ -84,6 +85,12 @@ export async function getVault(token) {
  * @returns {Promise<{ ciphertextBase64: string, versionId: string }>}
  */
 export async function putVault(token, ciphertextBase64) {
+  // Checked before the request so an oversized vault doesn't get uploaded
+  // just to be rejected. VaultController enforces the same limit server-side;
+  // this only exists to make the failure legible.
+  const tooLarge = validateVaultSize(ciphertextBase64);
+  if (tooLarge) throw new Error(tooLarge);
+
   const res = await apiRequest('/vault', { method: 'PUT', token, body: { ciphertextBase64 } });
   if (res.status !== 200) throw new ApiError(res.status, res.body);
   return res.body;

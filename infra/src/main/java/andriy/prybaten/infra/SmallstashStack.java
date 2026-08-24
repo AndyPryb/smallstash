@@ -9,6 +9,7 @@ import software.amazon.awscdk.aws_apigatewayv2_authorizers.HttpUserPoolAuthorize
 import software.amazon.awscdk.aws_apigatewayv2_authorizers.HttpUserPoolAuthorizerProps;
 import software.amazon.awscdk.aws_apigatewayv2_integrations.HttpLambdaIntegration;
 import software.amazon.awscdk.services.apigatewayv2.AddRoutesOptions;
+import software.amazon.awscdk.services.apigatewayv2.CfnStage;
 import software.amazon.awscdk.services.apigatewayv2.CorsHttpMethod;
 import software.amazon.awscdk.services.apigatewayv2.CorsPreflightOptions;
 import software.amazon.awscdk.services.apigatewayv2.HttpApi;
@@ -25,6 +26,7 @@ import software.amazon.awscdk.services.cognito.SignInAliases;
 import software.amazon.awscdk.services.cognito.UserPool;
 import software.amazon.awscdk.services.cognito.UserPoolClient;
 import software.amazon.awscdk.services.cognito.UserPoolClientOptions;
+import software.amazon.awscdk.services.cognito.UserPoolTriggers;
 import software.amazon.awscdk.services.cloudfront.BehaviorOptions;
 import software.amazon.awscdk.services.cloudfront.Distribution;
 import software.amazon.awscdk.services.cloudfront.ErrorResponse;
@@ -34,17 +36,24 @@ import software.amazon.awscdk.services.cloudfront.origins.S3BucketOrigin;
 import software.amazon.awscdk.services.dynamodb.Attribute;
 import software.amazon.awscdk.services.dynamodb.AttributeType;
 import software.amazon.awscdk.services.dynamodb.BillingMode;
+import software.amazon.awscdk.services.dynamodb.PointInTimeRecoverySpecification;
 import software.amazon.awscdk.services.dynamodb.Table;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
 import software.amazon.awscdk.services.lambda.Runtime;
+import software.amazon.awscdk.services.logs.LogGroup;
+import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.s3.BlockPublicAccess;
 import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.BucketEncryption;
+import software.amazon.awscdk.services.s3.LifecycleRule;
 import software.amazon.awscdk.services.s3.deployment.BucketDeployment;
 import software.amazon.awscdk.services.s3.deployment.Source;
 import software.constructs.Construct;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -67,13 +76,22 @@ public class SmallstashStack extends Stack {
     public SmallstashStack(final Construct scope, final String id, final StackProps props) {
         super(scope, id, props);
 
-        // Always DESTROY - deliberate choice while this stack is 100% dev/test
-        // (see docs/todo.md "Full teardown"). No real user data lives here
-        // yet, so `cdk destroy` should tear down cleanly with no orphaned
-        // S3/DynamoDB/Cognito resources left behind to hunt down manually.
-        // This used to be a `destroyData` context flag defaulting to RETAIN -
-        // switch it back to that pattern (or hardcode RETAIN) before this
-        // ever holds real, non-test data; see docs/todo.md for the tradeoffs.
+        // DESTROY *only* while this stack still holds nothing but test data.
+        // Deliberate: the stack gets destroyed/recreated frequently during
+        // development, and RETAIN turns every cycle into a manual cleanup of
+        // orphaned resources (worse with a fixed table name - the next deploy
+        // fails outright because `smallstash-users` already exists).
+        //
+        // !! MUST FLIP TO RETAIN BEFORE THE FIRST REAL SECRET IS STORED !!
+        // This was briefly RETAIN (security review finding H-3) and was
+        // reverted on purpose to keep the pre-production destroy/recreate loop
+        // cheap. Tracked in docs/todo.md - "Full teardown capability" and the
+        // security review's Phase 0 section both carry the reminder.
+        //
+        // Why it matters more than "we'd lose the test vaults": the S3 blob is
+        // versioned, so it has some rollback protection, but the DynamoDB KEYS
+        // item (the wrapped Vault Key) is a single copy. Lose that and every
+        // surviving S3 version is permanently undecryptable ciphertext.
         RemovalPolicy dataRemovalPolicy = RemovalPolicy.DESTROY;
 
         // ---------------------------------------------------------------
@@ -84,22 +102,56 @@ public class SmallstashStack extends Stack {
         // unique across all of AWS, so we let CDK pick one and pass it to the
         // Lambda via env var instead of risking a collision with a name we
         // guessed.
+        //
+        // autoDeleteObjects pairs with DESTROY above - a versioned bucket
+        // can't be deleted while it still has object versions in it, so
+        // without this every `cdk destroy` fails halfway. Drop it at the same
+        // time dataRemovalPolicy flips to RETAIN.
         Bucket vaultBucket = Bucket.Builder.create(this, "VaultBucket")
                 .versioned(true)
                 .encryption(BucketEncryption.S3_MANAGED)
                 .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
                 .removalPolicy(dataRemovalPolicy)
                 .autoDeleteObjects(true)
+                // Versioning means every save keeps the previous blob forever
+                // unless something expires it. Without this rule, normal use
+                // grows storage without bound, and an abusive client can grow
+                // it fast (see VaultController.MAX_CIPHERTEXT_BYTES, the other
+                // half of that control). Keeps the 3 most recent superseded
+                // versions as a manual "restore yesterday's vault" path
+                // regardless of age, and expires anything older than 90 days
+                // beyond those.
+                .lifecycleRules(List.of(LifecycleRule.builder()
+                        .id("ExpireOldVaultVersions")
+                        .enabled(true)
+                        .noncurrentVersionExpiration(Duration.days(90))
+                        .noncurrentVersionsToRetain(3)
+                        .abortIncompleteMultipartUploadAfter(Duration.days(7))
+                        .build()))
                 .build();
 
         // DynamoDB table names are only unique per account+region, so a fixed
         // name is safe here. This is the KDF salt/wrapped-key metadata every
-        // login depends on.
+        // login depends on - add `.deletionProtection(true)` here at the same
+        // time dataRemovalPolicy flips to RETAIN (see above); it's omitted for
+        // now only because it blocks the destroy/recreate loop.
         Table usersTable = Table.Builder.create(this, "UsersTable")
                 .tableName("smallstash-users")
                 .partitionKey(Attribute.builder().name("pk").type(AttributeType.STRING).build())
                 .sortKey(Attribute.builder().name("sk").type(AttributeType.STRING).build())
                 .billingMode(BillingMode.PAY_PER_REQUEST)
+                // Point-in-time recovery: continuous backups, restorable to
+                // any second in the last 35 days. Priced per GB of table size,
+                // and this table holds a few hundred bytes per user, so it is
+                // effectively free here. Worth it because this table is the
+                // asymmetry in the data model - the S3 vault blob is versioned,
+                // the wrapped Vault Key in here is a single copy, and losing it
+                // makes every surviving vault version permanently
+                // undecryptable. This is the only thing that would let a
+                // fat-fingered write or a bad deploy be undone.
+                .pointInTimeRecoverySpecification(PointInTimeRecoverySpecification.builder()
+                        .pointInTimeRecoveryEnabled(true)
+                        .build())
                 .removalPolicy(dataRemovalPolicy)
                 .build();
 
@@ -107,6 +159,58 @@ public class SmallstashStack extends Stack {
         // Auth (Cognito) - docs/todo.md: SRP-only, TOTP MFA optional
         // ---------------------------------------------------------------
 
+        // The invite code gating self-signup. Deliberately NOT hardcoded in
+        // this file: it's a shared secret handed out to real people, and
+        // CLAUDE.md's "never commit real secrets" applies to it like anything
+        // else. Normal path is SMALLSTASH_INVITE_CODE in the repo-root .env
+        // (gitignored, same file the test config already lives in). The synth
+        // fails loudly if it's missing rather than falling back to a default -
+        // a default invite code shipping by accident is exactly the hole this
+        // mechanism exists to close.
+        String inviteCode = resolveInviteCode();
+
+        // Rejects any SignUp whose validationData doesn't carry the current
+        // invite code. Inline Node rather than a second Maven module: it's ~20
+        // lines with no dependencies, and a Java Lambda's cold start would add
+        // seconds to every signup for no benefit.
+        //
+        // Deliberately lets PreSignUp_AdminCreateUser through untouched -
+        // admin-create-user already requires IAM credentials, so gating it on
+        // an invite code adds nothing and would break it as a manual fallback
+        // (it can't send validationData).
+        Function preSignUp = Function.Builder.create(this, "PreSignUpFunction")
+                .functionName("smallstash-presignup")
+                .runtime(Runtime.NODEJS_22_X)
+                .handler("index.handler")
+                .code(Code.fromInline("""
+                        exports.handler = async (event) => {
+                          if (event.triggerSource === 'PreSignUp_AdminCreateUser') return event;
+
+                          const expected = process.env.INVITE_CODE;
+                          const provided = event.request?.validationData?.inviteCode;
+                          if (!expected) throw new Error('Signup is unavailable right now.');
+                          if (typeof provided !== 'string' || provided.length !== expected.length) {
+                            throw new Error('That invite code is not valid.');
+                          }
+                          let diff = 0;
+                          for (let i = 0; i < expected.length; i++) {
+                            diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+                          }
+                          if (diff !== 0) throw new Error('That invite code is not valid.');
+                          return event;
+                        };
+                        """))
+                .memorySize(128)
+                .timeout(Duration.seconds(5))
+                .environment(Map.of("INVITE_CODE", inviteCode))
+                .build();
+
+        // selfSignUpEnabled stays true - the PreSignUp trigger above is what
+        // actually gates registration now. Turning this off instead would mean
+        // admin-create-user for every one of ~20 people; the invite code keeps
+        // it self-service while still closing the "anyone on the internet who
+        // finds the CloudFront URL can register" hole (finding H-1), since the
+        // pool id and client id in the PWA's config.json are public by design.
         UserPool userPool = UserPool.Builder.create(this, "UserPool")
                 .userPoolName("smallstash-users")
                 .selfSignUpEnabled(true)
@@ -122,6 +226,12 @@ public class SmallstashStack extends Stack {
                         .requireDigits(true)
                         .requireSymbols(true)
                         .build())
+                .lambdaTriggers(UserPoolTriggers.builder()
+                        .preSignUp(preSignUp)
+                        .build())
+                // `.deletionProtection(true)` goes here too when
+                // dataRemovalPolicy flips to RETAIN - same reasoning as the
+                // table above.
                 .removalPolicy(dataRemovalPolicy)
                 .build();
 
@@ -153,6 +263,23 @@ public class SmallstashStack extends Stack {
                 .code(Code.fromAsset("../target/smallstash-0.1.jar"))
                 .memorySize(512)
                 .timeout(Duration.seconds(30))
+                // Hard ceiling on how much Lambda this stack can ever run at
+                // once - the cost control the API Gateway throttle can't be.
+                // Throttling caps requests/second; concurrency caps how many
+                // run simultaneously, which is what actually bounds GB-seconds
+                // if something (a retry storm, a bug, an abusive client) gets
+                // past the throttle. 5 is far above real demand for ~20 users
+                // making a handful of requests a day, and low enough that a
+                // runaway can't cost meaningful money before the alarm fires.
+                .reservedConcurrentExecutions(5)
+                // Without this, the log group CDK implicitly creates never
+                // expires - logs accumulate (and stay billable) forever. One
+                // month is plenty for debugging a personal app.
+                .logGroup(LogGroup.Builder.create(this, "BackendFunctionLogGroup")
+                        .logGroupName("/aws/lambda/smallstash-backend")
+                        .retention(RetentionDays.ONE_MONTH)
+                        .removalPolicy(RemovalPolicy.DESTROY)
+                        .build())
                 .environment(Map.of(
                         "SMALLSTASH_VAULT_BUCKET", vaultBucket.getBucketName(),
                         "SMALLSTASH_USERS_TABLE", usersTable.getTableName(),
@@ -278,7 +405,7 @@ public class SmallstashStack extends Stack {
         // is a handful of requests every few days - see docs/todo.md). AWS's
         // account-level default (thousands of req/s) is a much higher ceiling
         // that stays in place regardless; this is a deliberately tighter one.
-        HttpStage.Builder.create(this, "DefaultStage")
+        HttpStage defaultStage = HttpStage.Builder.create(this, "DefaultStage")
                 .httpApi(httpApi)
                 .autoDeploy(true)
                 .throttle(ThrottleSettings.builder()
@@ -286,6 +413,35 @@ public class SmallstashStack extends Stack {
                         .burstLimit(20)
                         .build())
                 .build();
+
+        // Access logs: who called what, when, from where, and what they got
+        // back. Nothing else in this stack records that - the Lambda's own
+        // logs start *after* the JWT authorizer has already accepted or
+        // rejected a request, so a wave of 401s (the actual signal that
+        // someone is probing) would otherwise be invisible. Deliberately no
+        // request/response bodies, only metadata: bodies are ciphertext, but
+        // logging them would put vault contents in CloudWatch for no benefit.
+        LogGroup apiAccessLogs = LogGroup.Builder.create(this, "HttpApiAccessLogs")
+                .logGroupName("/aws/apigateway/smallstash-api")
+                .retention(RetentionDays.ONE_MONTH)
+                .removalPolicy(RemovalPolicy.DESTROY)
+                .build();
+
+        // No L2 property for this on HttpStage yet, so reach through to the
+        // underlying CfnStage.
+        CfnStage cfnStage = (CfnStage) defaultStage.getNode().getDefaultChild();
+        cfnStage.setAccessLogSettings(CfnStage.AccessLogSettingsProperty.builder()
+                .destinationArn(apiAccessLogs.getLogGroupArn())
+                .format(String.join(" ",
+                        "$context.identity.sourceIp",
+                        "$context.requestTime",
+                        "$context.httpMethod",
+                        "$context.routeKey",
+                        "$context.status",
+                        "$context.responseLength",
+                        "$context.requestId",
+                        "$context.authorizer.error"))
+                .build());
 
         // Generates the runtime config.json the deployed PWA fetches at
         // startup (src/lib/config.js) - written from this stack's actual
@@ -335,5 +491,69 @@ public class SmallstashStack extends Stack {
         CfnOutput.Builder.create(this, "SiteUrl")
                 .value("https://" + distribution.getDistributionDomainName())
                 .build();
+    }
+
+    /**
+     * Resolves the signup invite code, in precedence order: CDK context
+     * ({@code -c inviteCode=...}), then the {@code SMALLSTASH_INVITE_CODE}
+     * environment variable, then {@code SMALLSTASH_INVITE_CODE} in the
+     * repo-root {@code .env}.
+     *
+     * <p>The {@code .env} lookup is the intended everyday path - it means a
+     * plain {@code cdk deploy} works with no extra flags or exported vars,
+     * while the code itself stays out of git ({@code .env} is gitignored;
+     * {@code .env.example} carries the key with a blank value as the
+     * template). CDK does not read {@code .env} on its own, hence the manual
+     * parse.
+     *
+     * @throws IllegalStateException if no code is configured anywhere - a
+     *     deliberate hard failure, since the alternative is deploying a signup
+     *     endpoint that is either ungated or gated by a guessable default.
+     */
+    private String resolveInviteCode() {
+        Object fromContext = this.getNode().tryGetContext("inviteCode");
+        if (fromContext != null && !fromContext.toString().isBlank()) {
+            return fromContext.toString();
+        }
+
+        String fromEnv = System.getenv("SMALLSTASH_INVITE_CODE");
+        if (fromEnv != null && !fromEnv.isBlank()) {
+            return fromEnv;
+        }
+
+        // infra/ is the working directory for cdk commands, so the repo-root
+        // .env is one level up.
+        Path dotEnv = Path.of("..", ".env");
+        if (Files.isReadable(dotEnv)) {
+            try {
+                for (String line : Files.readAllLines(dotEnv)) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("#") || !trimmed.startsWith("SMALLSTASH_INVITE_CODE=")) {
+                        continue;
+                    }
+                    String value = trimmed.substring("SMALLSTASH_INVITE_CODE=".length()).trim();
+                    // Tolerate the quoted form (SMALLSTASH_INVITE_CODE="abc")
+                    // that .env files commonly use.
+                    if (value.length() >= 2
+                            && (value.startsWith("\"") && value.endsWith("\"")
+                                || value.startsWith("'") && value.endsWith("'"))) {
+                        value = value.substring(1, value.length() - 1);
+                    }
+                    if (!value.isBlank()) {
+                        return value;
+                    }
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("Could not read " + dotEnv.toAbsolutePath()
+                        + " while looking for SMALLSTASH_INVITE_CODE", e);
+            }
+        }
+
+        throw new IllegalStateException("""
+                No invite code configured. Signup is gated by one, so this stack refuses \
+                to synth rather than deploy an ungated (or default-coded) signup endpoint. \
+                Set SMALLSTASH_INVITE_CODE in the repo-root .env (gitignored - see \
+                .env.example), or pass it as CDK context: cdk deploy -c inviteCode=<value>. \
+                See docs/todo.md's security review (finding H-1).""");
     }
 }
