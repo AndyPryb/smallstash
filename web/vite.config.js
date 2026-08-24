@@ -1,10 +1,51 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { defineConfig, loadEnv } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// Serves/writes a `config.json` shaped exactly like the one
+// `SmallstashStack`'s `ConfigDeployment` generates for the real deployed
+// site (see infra/) - src/lib/config.js fetches this at runtime instead of
+// reading build-time constants, so a stack recreate (new Cognito pool/
+// client/API IDs) never requires a frontend rebuild again. Here, for local
+// dev/preview only, the same 4 values come from the repo-root .env instead
+// of live stack outputs.
+function runtimeConfigPlugin(env) {
+  const payload = JSON.stringify({
+    region: env.AWS_REGION ?? '',
+    userPoolId: env.COGNITO_USER_POOL_ID ?? '',
+    clientId: env.COGNITO_CLIENT_ID ?? '',
+    apiBaseUrl: env.API_BASE_URL ?? '',
+  });
+
+  return {
+    name: 'smallstash-runtime-config',
+    // `npm run dev` - no dist/ exists yet, so serve it from a middleware
+    // instead of a static file. Re-reads `env` captured at server start,
+    // same as every other Vite dev value (restart to pick up .env edits).
+    configureServer(server) {
+      server.middlewares.use('/config.json', (_req, res) => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(payload);
+      });
+    },
+    // `npm run build` - write a real config.json into the build output so
+    // `npm run preview` (serves dist/ as static files, no middleware) also
+    // works locally. This copy is dev-only and never uploaded: infra/'s
+    // SiteDeployment explicitly excludes config.json, so the real deploy
+    // only ever gets the one ConfigDeployment writes from live stack
+    // values.
+    writeBundle(options) {
+      const outDir = options.dir ?? path.resolve(repoRoot, 'web/dist');
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(path.join(outDir, 'config.json'), payload);
+    },
+  };
+}
 
 // Plain SPA - deliberately NOT SvelteKit. See docs/decisions/0002-pwa-stack.md:
 // SSR would create a place where frontend code executes on a server, and the
@@ -13,20 +54,16 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 export default defineConfig(({ mode }) => {
   // Share the repo-root .env with tests/api/ - same file, same four public
   // values (pool ID, client ID, API URL, region; see docs/architecture.md
-  // §5 for why these aren't secret), no second copy to keep in sync.
-  //
-  // Vite's default (import.meta.env) only bundles VITE_-prefixed vars, which
-  // would mean duplicating every value here under a second name just to
-  // expose it. Instead, loadEnv() with an empty prefix reads every var in
-  // .env (not just VITE_-prefixed ones), and the `define` block below
-  // whitelists exactly these 4 names into the client bundle. That explicit
-  // whitelist - not the VITE_ prefix convention - is what keeps
-  // TEST_USER_PASSWORD (and anything else in .env) out of shipped JS.
+  // §5 for why these aren't secret), no second copy to keep in sync. Only
+  // used here for local dev/preview's config.json - the deployed site's
+  // real values come from live CDK stack outputs instead, see
+  // src/lib/config.js and infra/'s ConfigDeployment.
   const env = loadEnv(mode, repoRoot, '');
 
   return {
     plugins: [
       svelte(),
+      runtimeConfigPlugin(env),
       VitePWA({
         registerType: 'autoUpdate',
         manifest: {
@@ -61,15 +98,6 @@ export default defineConfig(({ mode }) => {
       // path throws at runtime (not build time), so it fails on the login
       // screen rather than in CI.
       global: 'globalThis',
-
-      // The whitelist described above - only these 4 vars from .env reach
-      // the client. Read via import.meta.env.VITE_* in src/lib/config.js so
-      // every other env access in the app still goes through Vite's normal
-      // (safe-by-default) mechanism; only this one call site is special.
-      'import.meta.env.VITE_AWS_REGION': JSON.stringify(env.AWS_REGION ?? ''),
-      'import.meta.env.VITE_COGNITO_USER_POOL_ID': JSON.stringify(env.COGNITO_USER_POOL_ID ?? ''),
-      'import.meta.env.VITE_COGNITO_CLIENT_ID': JSON.stringify(env.COGNITO_CLIENT_ID ?? ''),
-      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(env.API_BASE_URL ?? ''),
     },
 
     server: {

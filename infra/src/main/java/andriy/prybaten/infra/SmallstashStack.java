@@ -215,9 +215,17 @@ public class SmallstashStack extends Stack {
         // first, same as the backend jar needs `mvn package` first - CDK
         // does not build either for you and fails with an asset-not-found
         // error on a stale/missing web/dist.
+        //
+        // Excludes config.json: `npm run build` writes a dev-only copy of it
+        // (from the local .env) so `npm run preview` works standalone, but
+        // the deployed site must only ever get the one ConfigDeployment
+        // writes below, from this stack's actual live values - otherwise
+        // whichever of the two BucketDeployments happens to run last would
+        // silently decide which one wins.
         BucketDeployment.Builder.create(this, "SiteDeployment")
                 .sources(List.of(Source.asset("../web/dist")))
                 .destinationBucket(siteBucket)
+                .exclude(List.of("config.json"))
                 .distribution(distribution)
                 .distributionPaths(List.of("/*"))
                 .build();
@@ -277,6 +285,29 @@ public class SmallstashStack extends Stack {
                         .rateLimit(10)
                         .burstLimit(20)
                         .build())
+                .build();
+
+        // Generates the runtime config.json the deployed PWA fetches at
+        // startup (src/lib/config.js) - written from this stack's actual
+        // resolved values, not baked into the JS bundle at `npm run build`
+        // time. This is what lets a full stack recreate (new pool/client/API
+        // IDs) take effect on the live site without ever needing a frontend
+        // rebuild - see docs/todo.md "PWA build/deploy gotcha" for the
+        // incident this replaced. Deliberately a second, separate
+        // BucketDeployment from SiteDeployment above (not one more Source in
+        // that list) purely because these values - httpApi's endpoint in
+        // particular - aren't available until HttpApi is constructed further
+        // down in this file than SiteDeployment is; order doesn't otherwise
+        // matter since SiteDeployment explicitly excludes this same key.
+        BucketDeployment.Builder.create(this, "ConfigDeployment")
+                .sources(List.of(Source.jsonData("config.json", Map.of(
+                        "region", this.getRegion(),
+                        "userPoolId", userPool.getUserPoolId(),
+                        "clientId", userPoolClient.getUserPoolClientId(),
+                        "apiBaseUrl", httpApi.getApiEndpoint()))))
+                .destinationBucket(siteBucket)
+                .distribution(distribution)
+                .distributionPaths(List.of("/config.json"))
                 .build();
 
         // ---------------------------------------------------------------
