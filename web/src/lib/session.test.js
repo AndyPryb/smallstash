@@ -53,6 +53,9 @@ const cognitoMocks = {
   signUp: mock.fn(),
   confirmSignUp: mock.fn(),
   submitMfaCode: mock.fn(),
+  forgotPassword: mock.fn(),
+  confirmForgotPassword: mock.fn(),
+  changePassword: mock.fn(),
   MfaRequiredError,
 };
 mock.module('./auth/cognito.js', { namedExports: cognitoMocks });
@@ -101,11 +104,16 @@ async function primeOnlineAccount({ masterPassword, sub = randomSub(), vaultDocu
   const { userKeys, vaultKey, recoveryKey } = await createKeyMaterial(masterPassword);
   const ciphertextBase64 = await encryptVault(vaultKey, vaultDocument);
 
-  cognitoMocks.signIn.mock.mockImplementation(async () => ({ idToken: fakeIdToken(sub) }));
+  // A plain marker object, not a real CognitoUser - session.js never calls
+  // anything on it itself, just holds onto it and hands it back to
+  // auth/cognito.js's (mocked) changePassword() later, so tests can assert
+  // *which* instance changeLoginPassword forwards.
+  const cognitoUser = { fakeCognitoUser: true };
+  cognitoMocks.signIn.mock.mockImplementation(async () => ({ idToken: fakeIdToken(sub), cognitoUser }));
   apiMocks.getKeys.mock.mockImplementation(async () => userKeys);
   apiMocks.getVault.mock.mockImplementation(async () => ({ ciphertextBase64, versionId: 'v1' }));
 
-  return { sub, userKeys, vaultKey, recoveryKey, vaultDocument };
+  return { sub, userKeys, vaultKey, recoveryKey, vaultDocument, cognitoUser };
 }
 
 /** Populates the offline cache directly (bypassing any sign-in), for tests
@@ -408,6 +416,85 @@ test('changeMasterPassword: happy path re-wraps the same Vault Key under the new
 
   // The old password must no longer work against the newly uploaded keys.
   await assert.rejects(() => unlockWithMasterPassword(uploadedKeys, masterPassword), WrongSecretError);
+});
+
+// --- changeLoginPassword -------------------------------------------------
+
+test('changeLoginPassword: rejects with no active session', async () => {
+  await assert.rejects(() => session.changeLoginPassword('old', 'new'), /no active session/i);
+});
+
+test('changeLoginPassword: rejects while offline-unlocked', async () => {
+  const masterPassword = 'a master password';
+  const { sub } = await primeOfflineCache({ masterPassword });
+  await session.unlockOffline(sub, masterPassword);
+
+  await assert.rejects(
+    () => session.changeLoginPassword('old', 'new'),
+    /cannot change login password while offline/i,
+  );
+});
+
+test('changeLoginPassword: happy path forwards to Cognito with the session\'s CognitoUser', async () => {
+  const masterPassword = 'a master password';
+  const { cognitoUser } = await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'old-login-password', masterPassword);
+
+  let calledWith;
+  cognitoMocks.changePassword.mock.mockImplementation(async (...args) => {
+    calledWith = args;
+  });
+
+  await session.changeLoginPassword('old-login-password', 'new-login-password');
+
+  assert.deepEqual(calledWith, [cognitoUser, 'old-login-password', 'new-login-password']);
+});
+
+test('changeLoginPassword: a Cognito rejection (e.g. wrong current password) propagates', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'old-login-password', masterPassword);
+
+  cognitoMocks.changePassword.mock.mockImplementation(async () => {
+    throw new Error('Incorrect username or password');
+  });
+
+  await assert.rejects(
+    () => session.changeLoginPassword('wrong', 'new-login-password'),
+    /incorrect username or password/i,
+  );
+});
+
+// --- login password recovery (requestLoginPasswordReset / confirmLoginPasswordReset) ---
+
+test('requestLoginPasswordReset: delegates to Cognito forgotPassword with the configured pool/client', async () => {
+  cognitoMocks.forgotPassword.mock.mockImplementation(async () => {});
+
+  await session.requestLoginPasswordReset('person@example.com');
+
+  assert.equal(cognitoMocks.forgotPassword.mock.callCount(), 1);
+  const [args] = cognitoMocks.forgotPassword.mock.calls[0].arguments;
+  assert.deepEqual(args, { userPoolId: 'fake-pool', clientId: 'fake-client', email: 'person@example.com' });
+});
+
+test('confirmLoginPasswordReset: delegates to Cognito confirmForgotPassword, no vault key material touched', async () => {
+  cognitoMocks.confirmForgotPassword.mock.mockImplementation(async () => {});
+
+  await session.confirmLoginPasswordReset('person@example.com', '123456', 'brand-new-login-password');
+
+  assert.equal(cognitoMocks.confirmForgotPassword.mock.callCount(), 1);
+  const [args] = cognitoMocks.confirmForgotPassword.mock.calls[0].arguments;
+  assert.deepEqual(args, {
+    userPoolId: 'fake-pool',
+    clientId: 'fake-client',
+    email: 'person@example.com',
+    code: '123456',
+    newPassword: 'brand-new-login-password',
+  });
+  // Neither the vault key/API mocks nor a session were ever touched -
+  // resetting the login password is independent of vault key material.
+  assert.equal(apiMocks.getKeys.mock.callCount(), 0);
+  assert.equal(session.isUnlocked(), false);
 });
 
 // --- session lifecycle -------------------------------------------------

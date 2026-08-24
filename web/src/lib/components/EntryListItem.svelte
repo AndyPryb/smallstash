@@ -262,6 +262,14 @@
   .edit-form textarea {
     padding: 0.4rem;
   }
+  .edit-form textarea {
+    /* Browser default is resize: both, which lets the textarea grow wider
+       than every other field/button in the form - pin the width, keep
+       height freely resizable. */
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+  }
   .password-row {
     display: flex;
     gap: 0.4rem;

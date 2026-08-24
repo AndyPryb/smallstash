@@ -5,6 +5,7 @@
    * accidentally conflate their two independent secrets
    * (docs/architecture.md §5).
    */
+  import PasswordField from './PasswordField.svelte';
 
   /** @type {{ onlogin: (detail: { email: string, loginPassword: string, masterPassword: string }) => void, loading: boolean }} */
   let { onlogin, loading } = $props();
@@ -27,7 +28,7 @@
 
   <label>
     Login password
-    <input type="password" bind:value={loginPassword} autocomplete="current-password" required />
+    <PasswordField bind:value={loginPassword} autocomplete="current-password" required />
     <small>Your account sign-in password.</small>
   </label>
 
@@ -35,7 +36,7 @@
 
   <label>
     Master Password
-    <input type="password" bind:value={masterPassword} autocomplete="off" required />
+    <PasswordField bind:value={masterPassword} autocomplete="off" required />
     <small>Unlocks your vault. Never sent to the server - kept separate from your login password on purpose.</small>
   </label>
 

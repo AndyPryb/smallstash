@@ -67,8 +67,8 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: 'autoUpdate',
         manifest: {
-          name: 'smallStash',
-          short_name: 'smallStash',
+          name: 'Small Stash',
+          short_name: 'Small Stash',
           description: 'Zero-knowledge password manager',
           theme_color: '#1b1f24',
           background_color: '#1b1f24',

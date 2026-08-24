@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { saveVault, isOfflineSession } from '../session.js';
   import ChangeMasterPasswordForm from './ChangeMasterPasswordForm.svelte';
+  import ChangeLoginPasswordForm from './ChangeLoginPasswordForm.svelte';
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
   import EntryListItem from './EntryListItem.svelte';
 
@@ -27,6 +28,7 @@
   let saving = $state(false);
   let saveError = $state('');
   let showChangePassword = $state(false);
+  let showChangeLoginPassword = $state(false);
   let showGenerator = $state(false);
   let showNewPassword = $state(false);
 
@@ -116,6 +118,9 @@
       <span class="dirty-indicator" role="status">Unsaved changes</span>
     {/if}
     <button type="button" onclick={() => (showChangePassword = !showChangePassword)}>Change Master Password</button>
+    <button type="button" onclick={() => (showChangeLoginPassword = !showChangeLoginPassword)}>
+      Change Login Password
+    </button>
     <button type="button" onclick={handleSignOut}>Sign out</button>
   </div>
 
@@ -133,6 +138,10 @@
 
   {#if showChangePassword}
     <ChangeMasterPasswordForm onclose={() => (showChangePassword = false)} />
+  {/if}
+
+  {#if showChangeLoginPassword}
+    <ChangeLoginPasswordForm onclose={() => (showChangeLoginPassword = false)} />
   {/if}
 
   <ul class="entries">
@@ -209,6 +218,14 @@
   input,
   textarea {
     padding: 0.4rem;
+  }
+  textarea {
+    /* Browser default is resize: both, which lets the textarea grow wider
+       than every other field/button in the form - pin the width, keep
+       height freely resizable. */
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
   }
   .password-row {
     display: flex;

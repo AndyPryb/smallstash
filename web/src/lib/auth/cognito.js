@@ -34,7 +34,7 @@ function getPool({ userPoolId, clientId }) {
  * @param {string} args.clientId
  * @param {string} args.email
  * @param {string} args.password Cognito login password - NOT the Master Password
- * @returns {Promise<{ idToken: string, accessToken: string, expiresAt: number }>}
+ * @returns {Promise<{ idToken: string, accessToken: string, expiresAt: number, cognitoUser: CognitoUser }>}
  */
 export function signIn({ userPoolId, clientId, email, password }) {
   const userPool = getPool({ userPoolId, clientId });
@@ -48,6 +48,10 @@ export function signIn({ userPoolId, clientId, email, password }) {
           idToken: session.getIdToken().getJwtToken(),
           accessToken: session.getAccessToken().getJwtToken(),
           expiresAt: session.getIdToken().getExpiration() * 1000, // ms epoch
+          // Returned so callers (session.js) can hold onto it for
+          // changePassword() later - it already carries the authenticated
+          // session internally, no separate re-auth needed for that call.
+          cognitoUser,
         });
       },
       onFailure: reject,
@@ -126,9 +130,76 @@ export function submitMfaCode(cognitoUser, code) {
           idToken: session.getIdToken().getJwtToken(),
           accessToken: session.getAccessToken().getJwtToken(),
           expiresAt: session.getIdToken().getExpiration() * 1000,
+          cognitoUser,
         });
       },
       onFailure: reject,
+    });
+  });
+}
+
+/**
+ * Step 1 of Cognito's "forgot password" flow for the login password -
+ * distinct from the vault's Recovery Key, which recovers the Master
+ * Password instead (docs/architecture.md §5). No prior authentication
+ * needed: Cognito emails a verification code to the account's verified
+ * email address. Follow up with confirmForgotPassword.
+ *
+ * @param {object} args
+ * @param {string} args.userPoolId
+ * @param {string} args.clientId
+ * @param {string} args.email
+ */
+export function forgotPassword({ userPoolId, clientId, email }) {
+  const userPool = getPool({ userPoolId, clientId });
+  const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
+  return new Promise((resolve, reject) => {
+    cognitoUser.forgotPassword({
+      onSuccess: resolve,
+      onFailure: reject,
+    });
+  });
+}
+
+/**
+ * Step 2: complete the reset with the emailed code and a new login
+ * password. Cognito enforces the account password policy (12+ chars,
+ * upper/lower/digit/symbol - see infra/'s SmallstashStack.java) server-side
+ * on this call, same as signUp.
+ *
+ * @param {object} args
+ * @param {string} args.userPoolId
+ * @param {string} args.clientId
+ * @param {string} args.email
+ * @param {string} args.code the emailed verification code
+ * @param {string} args.newPassword
+ */
+export function confirmForgotPassword({ userPoolId, clientId, email, code, newPassword }) {
+  const userPool = getPool({ userPoolId, clientId });
+  const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
+  return new Promise((resolve, reject) => {
+    cognitoUser.confirmPassword(code, newPassword, {
+      onSuccess: resolve,
+      onFailure: reject,
+    });
+  });
+}
+
+/**
+ * Change the login password for an already-authenticated user - requires
+ * the CognitoUser instance from a just-completed signIn/submitMfaCode
+ * (carries the session Cognito's ChangePassword API needs), not just an
+ * email. See session.js's changeLoginPassword for the caller-facing side.
+ *
+ * @param {CognitoUser} cognitoUser
+ * @param {string} oldPassword
+ * @param {string} newPassword
+ */
+export function changePassword(cognitoUser, oldPassword, newPassword) {
+  return new Promise((resolve, reject) => {
+    cognitoUser.changePassword(oldPassword, newPassword, (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
     });
   });
 }
