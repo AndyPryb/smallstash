@@ -280,13 +280,16 @@ export async function initializeVault(idToken, sub, masterPassword, cognitoUser 
  * @param {string} email
  * @param {string} loginPassword Cognito login password - independent of the
  *   Master Password, which isn't collected until step 3 (initializeVault)
+ * @param {string} inviteCode checked by the PreSignUp Lambda trigger; a wrong
+ *   one rejects the sign-up outright, so no account is created
  */
-export function registerAccount(email, loginPassword) {
+export function registerAccount(email, loginPassword, inviteCode) {
   return cognitoSignUp({
     userPoolId: config.userPoolId,
     clientId: config.clientId,
     email,
     password: loginPassword,
+    inviteCode,
   });
 }
 
@@ -368,6 +371,9 @@ export async function changeMasterPassword(currentMasterPassword, newMasterPassw
     vaultKey: active.vaultKey,
     newMasterPassword,
     recoveryKeyInput,
+    // Just fetched above, so this is the authoritative stored version - the
+    // backend rejects a PUT whose keyVersion isn't strictly greater.
+    previousKeyVersion: currentUserKeys.keyVersion,
   });
   await putKeys(active.idToken, newUserKeys);
   await cacheKeyMaterial(active.sub, newUserKeys);

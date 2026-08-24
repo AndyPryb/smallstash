@@ -8,6 +8,7 @@ import software.amazon.awssdk.enhanced.dynamodb.Expression;
 import software.amazon.awssdk.enhanced.dynamodb.Key;
 import software.amazon.awssdk.enhanced.dynamodb.TableSchema;
 import software.amazon.awssdk.enhanced.dynamodb.model.PutItemEnhancedRequest;
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 
 import java.time.Instant;
@@ -36,6 +37,13 @@ public class DynamoDbUserKeysRepository implements UserKeysRepository {
         return Optional.ofNullable(item).map(DynamoDbUserKeysRepository::toDomain);
     }
 
+    /**
+     * Conditional on the incoming {@code keyVersion} being strictly newer than
+     * whatever is stored (or nothing being stored yet, for the first write at
+     * signup). See {@link KeyVersionConflictException} for why this write in
+     * particular is guarded - it's the one that can permanently orphan a
+     * vault.
+     */
     @Override
     public void saveKeys(String userSub, UserKeys keys) {
         UserKeysItem item = new UserKeysItem();
@@ -48,7 +56,24 @@ public class DynamoDbUserKeysRepository implements UserKeysRepository {
         item.setWrappedVaultKeyByMaster(keys.wrappedVaultKeyByMaster());
         item.setWrappedVaultKeyByRecovery(keys.wrappedVaultKeyByRecovery());
         item.setKeyVersion(keys.keyVersion());
-        keysTable.putItem(item);
+
+        // #kv rather than a bare `keyVersion`: attribute names in condition
+        // expressions collide with DynamoDB's reserved-word list, and using a
+        // placeholder sidesteps the question entirely.
+        PutItemEnhancedRequest<UserKeysItem> request = PutItemEnhancedRequest.builder(UserKeysItem.class)
+                .item(item)
+                .conditionExpression(Expression.builder()
+                        .expression("attribute_not_exists(pk) OR #kv < :newKeyVersion")
+                        .putExpressionName("#kv", "keyVersion")
+                        .putExpressionValue(":newKeyVersion",
+                                AttributeValue.builder().n(Integer.toString(keys.keyVersion())).build())
+                        .build())
+                .build();
+        try {
+            keysTable.putItem(request);
+        } catch (ConditionalCheckFailedException stale) {
+            throw new KeyVersionConflictException(userSub, keys.keyVersion());
+        }
     }
 
     @Override

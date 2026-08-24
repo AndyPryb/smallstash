@@ -311,7 +311,7 @@ test('registerAccount/confirmAccount: delegate to Cognito with the configured po
   cognitoMocks.signUp.mock.mockImplementation(async () => ({}));
   cognitoMocks.confirmSignUp.mock.mockImplementation(async () => ({}));
 
-  await session.registerAccount('person@example.com', 'a-login-password');
+  await session.registerAccount('person@example.com', 'a-login-password', 'an-invite-code');
   await session.confirmAccount('person@example.com', '123456');
 
   assert.deepEqual(cognitoMocks.signUp.mock.calls[0].arguments[0], {
@@ -319,6 +319,7 @@ test('registerAccount/confirmAccount: delegate to Cognito with the configured po
     clientId: 'fake-client',
     email: 'person@example.com',
     password: 'a-login-password',
+    inviteCode: 'an-invite-code',
   });
   assert.deepEqual(cognitoMocks.confirmSignUp.mock.calls[0].arguments[0], {
     userPoolId: 'fake-pool',

@@ -27,6 +27,7 @@
   let error = $state('');
 
   let email = $state('');
+  let inviteCode = $state('');
   let loginPassword = $state('');
   let confirmLoginPassword = $state('');
   let masterPassword = $state('');
@@ -82,7 +83,7 @@
 
     busy = true;
     try {
-      await registerAccount(email, loginPassword);
+      await registerAccount(email, loginPassword, inviteCode.trim());
       step = 'confirm';
     } catch (err) {
       error = err.message ?? String(err);
@@ -121,6 +122,19 @@
 
 {#if step === 'register'}
   <form onsubmit={submitRegister}>
+    <label>
+      Invite code
+      <input
+        bind:value={inviteCode}
+        autocomplete="off"
+        autocapitalize="off"
+        autocorrect="off"
+        spellcheck="false"
+        required
+      />
+      <small>Small Stash is invite-only. Ask whoever runs this instance for a code.</small>
+    </label>
+
     <label>
       Email
       <input type="email" bind:value={email} autocomplete="username" required />
@@ -200,6 +214,14 @@
   }
   small {
     color: #888;
+  }
+  hr {
+    /* See LoginForm.svelte for why this reset is needed - browser-default
+       hr margins disable flexbox stretch, collapsing it to a stray dot. */
+    width: 100%;
+    border: none;
+    border-top: 1px solid #333;
+    margin: 0;
   }
   .actions {
     display: flex;

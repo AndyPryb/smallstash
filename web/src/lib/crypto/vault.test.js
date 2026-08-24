@@ -68,6 +68,44 @@ test('rewrapWithNewMasterPassword keeps the same Vault Key reachable under the n
   assert.notEqual(rewrapped.kdfSalt, userKeys.kdfSalt);
 });
 
+test('rewrapWithNewMasterPassword steps keyVersion past a previous version ahead of this clock', async () => {
+  const { vaultKey, recoveryKey } = await createKeyMaterial('old password');
+
+  // Simulates the case the backend's conditional PUT /keys would otherwise
+  // reject forever: another device (or a clock ahead of ours) already stored
+  // a keyVersion in the future relative to Date.now(). Without stepping past
+  // it, this device could never change its Master Password again.
+  const farFuture = Math.floor(Date.now() / 1000) + 86_400;
+
+  const rewrapped = await rewrapWithNewMasterPassword({
+    vaultKey,
+    newMasterPassword: 'new password',
+    recoveryKeyInput: recoveryKey,
+    previousKeyVersion: farFuture,
+  });
+
+  assert.ok(
+    rewrapped.keyVersion > farFuture,
+    `expected keyVersion > ${farFuture}, got ${rewrapped.keyVersion}`,
+  );
+  // Still an int32 - keyVersion is an `int` backend-side (UserKeys.java).
+  assert.ok(rewrapped.keyVersion < 2 ** 31 - 1);
+});
+
+test('rewrapWithNewMasterPassword uses wall-clock time when no previous version is ahead of it', async () => {
+  const { vaultKey, recoveryKey } = await createKeyMaterial('old password');
+  const before = Math.floor(Date.now() / 1000);
+
+  const rewrapped = await rewrapWithNewMasterPassword({
+    vaultKey,
+    newMasterPassword: 'new password',
+    recoveryKeyInput: recoveryKey,
+    previousKeyVersion: 1,
+  });
+
+  assert.ok(rewrapped.keyVersion >= before);
+});
+
 test('encryptVault/decryptVault round-trips an arbitrary JSON document', async () => {
   const { vaultKey } = await createKeyMaterial('a master password');
   const document = {
