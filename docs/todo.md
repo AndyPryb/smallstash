@@ -677,10 +677,70 @@ switch" (see below).
       one subscriber, and a containment control that fires with nobody
       informed turns an outage into a mystery. The whole thing is skipped if
       that's unset.
-      ⚠️ **Possible first-deploy failure**: this is the first thing in the
-      stack needing `budgets:*` and IAM role/policy *creation* rights. If
-      `smallstash-deployer`'s policy is too narrow, the deploy fails here -
-      that's a deployer-permissions problem, not a broken stack.
+      **Deployability confirmed 2026-08-24** (an earlier note here guessed
+      this would be a first-deploy failure point on deployer permissions -
+      that was wrong, see "How deploys actually authorize" below).
+
+## How deploys actually authorize (checked 2026-08-24)
+
+Worth writing down, because reasoning about `smallstash-deployer`'s policy
+alone leads to the wrong conclusion - it did once already in this repo.
+
+`cdk deploy` does **not** create resources as the deployer user. With
+bootstrap v32 (`CDKToolkit`, `CREATE_COMPLETE`), the CLI assumes
+`cdk-hnb659fds-deploy-role-<account>-<region>`, and CloudFormation then
+executes the changeset as
+`cdk-hnb659fds-cfn-exec-role-<account>-<region>` - **which has
+`AdministratorAccess` attached** (verified via
+`aws iam list-attached-role-policies`). So resource creation is bounded by
+that role, not by the user's own policy.
+
+Practical consequences:
+
+- `smallstash-deployer`'s `PowerUserAccess` + `smallstash-deployer-iam-scope`
+  are enough to deploy this stack. The IAM resource scoping
+  (`role/smallstash-*`, `role/cdk-*`, `policy/smallstash-*`, ...) doesn't
+  need to match CDK's generated logical names (`SmallstashStack-...`,
+  which wouldn't match `smallstash-*` anyway - IAM ARN matching is
+  case-sensitive), because those roles are created by CloudFormation as
+  admin, not by the user directly.
+- Confirmed separately that the deployer *can* read Budgets
+  (`aws budgets describe-budgets` succeeds), so billing access is activated
+  for IAM principals and `budgets:*` falls under `PowerUserAccess` - the
+  cost kill switch has no special permission prerequisite.
+
+- [ ] ⚠️ **Security observation: the deployer's IAM scoping is weaker than
+      it looks.** Because the CFN execution role holds
+      `AdministratorAccess`, anyone able to run `cdk deploy` with these
+      credentials can effectively do anything in the account by putting it
+      in a template - the carefully scoped
+      `smallstash-deployer-iam-scope` policy constrains *direct* IAM calls
+      but not what CloudFormation will do on their behalf. This is CDK's
+      default bootstrap posture, not a misconfiguration, and it's a
+      reasonable trade for a solo project. Worth knowing rather than
+      assuming the scoping protects more than it does. If it ever matters,
+      `cdk bootstrap --cloudformation-execution-policies <arns>` re-creates
+      the exec role with a narrower policy - at the cost of having to widen
+      it again every time the stack grows a new resource type.
+
+## Live stack state - DESTROYED as of 2026-08-24
+
+`SmallstashStack` is `DELETE_COMPLETE` (last deleted 2026-08-24 14:43 UTC;
+several earlier destroy/recreate cycles before that). Verified gone:
+Cognito pool `eu-west-1_fuVsnnUma`, DynamoDB `smallstash-users`, the vault
+bucket, and the `smallstash-backend` Lambda. Deliberate - the stack is
+being torn down between pre-production iterations, which is exactly what
+the DESTROY removal policy is for.
+
+⚠️ **Every "Live stack outputs" value recorded further down this file, and
+in the repo-root `.env`, is therefore dead** - pool id, client id, API URL,
+bucket names. This has already caused one confusing incident (a "you're
+offline" error in local dev that was really a deleted API Gateway). After
+the next `cdk deploy`, refresh both from:
+`aws cloudformation describe-stacks --stack-name SmallstashStack --query "Stacks[0].Outputs"`.
+
+`SMALLSTASH_INVITE_CODE` and `SMALLSTASH_ALERT_EMAIL` in `.env` are *not*
+stack-derived and stay valid across recreates.
 
 ## Full teardown capability - now always DESTROY (2026-08-24)
 
