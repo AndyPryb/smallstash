@@ -16,6 +16,7 @@
    * in the list.
    */
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
+  import ResizableTextarea from './ResizableTextarea.svelte';
   import { normalizedUrl } from '../url.js';
 
   /** @type {{ entry: { id: string, title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
@@ -169,7 +170,7 @@
         <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
       {/if}
       <label>URL <input bind:value={editUrl} /></label>
-      <label>Notes <textarea bind:value={editNotes}></textarea></label>
+      <label>Notes <ResizableTextarea bind:value={editNotes} /></label>
       <div class="row">
         <button type="submit">Save</button>
         <button type="button" onclick={cancelEdit}>Cancel</button>

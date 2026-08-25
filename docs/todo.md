@@ -4,6 +4,47 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
+## Restyle the UI (2026-08-25)
+
+Raised in conversation, not scoped yet - the app's visual design has never
+had a dedicated pass. Current UI is functional (dark theme fix, the Rust
+"Small Stash" pouch nod in the header/icons, per-field consistency passes)
+but was never designed as a whole - it's grown feature-by-feature.
+
+- [ ] **Scope and do a UI restyle.** Open question to settle first: how
+      much - a design-token/spacing/typography pass over the existing
+      layout, or a more structural rework (nav, layout, component
+      library)? Related, smaller items already found and worth folding in
+      if this happens: the Notes field's resize handle was reportedly a
+      near-invisible dot on Android before the 2026-08-25 fix (see below) -
+      a broader mobile/touch-target pass might turn up more of the same
+      class of issue elsewhere (buttons, toggles, the entry list's tap
+      targets).
+
+## Notes field resize handle unusable on Android - fixed (2026-08-25)
+
+Reported: the native `<textarea>` resize corner (bottom-right, drag to
+resize) was "almost a dot" on an Android phone - not a CSS sizing tweak
+away, since the browser draws that handle itself and mobile Chrome renders
+it near-invisibly.
+
+Fixed with a custom, oversized resize affordance instead of relying on the
+native one: `web/src/lib/components/ResizableTextarea.svelte` turns off
+`resize` on the `<textarea>` and adds a 32x32px handle driven by Pointer
+Events (one implementation covers mouse/touch/pen), using pointer capture
+so a fast drag can't "escape" the small handle mid-gesture on a touch
+screen. Wired into both places a Notes field exists - `VaultView.svelte`'s
+add-entry form and `EntryListItem.svelte`'s edit form.
+
+32px was a deliberate compromise, not the ideal 44-48px Android/iOS touch
+target guideline - a full-size handle would eat into the textarea's own
+corner, where a user legitimately wants to place their text caret.
+
+- [ ] **Verify on a real Android device** - build/tests verified clean
+      (97/97, `npm run build`), but this is exactly the class of bug that
+      only really shows up on real touch hardware. If 32px still isn't
+      comfortable to grab, size it up.
+
 ## Export secrets feature (2026-08-24)
 
 Idea: let a user export their vault entries (e.g. to a file) - raised in
@@ -816,15 +857,91 @@ assumed from the code:
 - [x] DynamoDB table `ACTIVE`, S3 vault bucket reachable, Cognito pool
       exists with `MfaConfiguration: OPTIONAL` as designed.
 
+## Post-deploy smoke test - security review, 2026-08-24 redeploy
+
+Full pass against the live stack after the Phase 0-3 security work
+actually shipped (all 50 resources `CREATE_COMPLETE`, none in a bad
+state). Every item below hit the real API/Cognito/AWS APIs, not read from
+the template:
+
+- [x] `GET /vault`, `PUT /keys` unauthenticated → 401; garbage bearer
+      token → 401; undefined route → 404.
+- [x] All four CloudFront security headers present: HSTS
+      (`max-age=31536000; includeSubDomains`), `X-Frame-Options: DENY`,
+      `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
+- [x] CSP present as `Content-Security-Policy-Report-Only` (not yet
+      enforcing, as intended) with the exact directives from
+      `SmallstashStack.java`.
+- [x] `config.json` matches the new stack's actual outputs.
+- [x] Cognito pool: `UserPoolTier: PLUS`,
+      `AdvancedSecurityMode: ENFORCED`, `PreSignUp` trigger wired to
+      `smallstash-presignup`, `AllowAdminCreateUserOnly: false` (self-signup
+      still enabled, gated by the trigger instead - as designed).
+- [x] App client: `PreventUserExistenceErrors: ENABLED`, refresh token
+      10080 minutes (7 days).
+- [x] **User enumeration fix confirmed live and working exactly as
+      intended**: an `InitiateAuth` for a nonexistent user no longer
+      returns `UserNotFoundException` - it now returns an indistinguishable
+      simulated SRP challenge (a real `USER_ID_FOR_SRP`), so an attacker
+      gets no signal either way.
+- [x] **Invite gate confirmed live**: `sign-up` with a wrong invite code
+      is rejected by the PreSignUp trigger with
+      `UserLambdaValidationException: ... That invite code is not valid.`
+      - the exact message written into the trigger.
+- [x] Lambda: no `ReservedConcurrentExecutions` (confirms the revert
+      shipped), `COGNITO_ISSUER`/`COGNITO_CLIENT_ID` present in env (JWT
+      claim validation wired), log group retention **30 days** (confirms
+      this is the fresh CDK-managed group, not the old orphan with no
+      retention).
+- [x] S3 vault bucket: lifecycle rule live exactly as configured
+      (`NoncurrentDays: 90`, `NewerNoncurrentVersions: 3`,
+      `AbortIncompleteMultipartUpload: 7 days`).
+- [x] DynamoDB: PITR `ENABLED`.
+- [x] Cost kill switch: budget `smallstash-app` exists at $10; its
+      `BudgetsAction` is `APPLY_IAM_POLICY`, `AUTOMATIC` approval, status
+      `STANDBY` (healthy/watching, hasn't tripped).
+- [x] CloudWatch alarm `smallstash-backend-invocation-spike`: state `OK`,
+      threshold 200 as configured.
+- [x] API Gateway: throttle live (10 rps / 20 burst), access logging
+      wired to `/aws/apigateway/smallstash-api`, CORS allowlist is a single
+      origin (the CloudFront domain) - `localhost:5173` confirmed absent
+      from the deployed API.
+- [x] `iam:ListRolePolicies` denied for `smallstash-deployer` when
+      checking the Lambda's inline policy directly - **expected**, same
+      scoping seen before this deploy; not a regression, just means that
+      one specific read isn't independently verifiable from here (the
+      policy's *effect* - the 401s/etc. above - is what's actually being
+      tested).
+
+- [x] **SNS subscription confirmed (2026-08-24)** - was flagged as the one
+      real follow-up from the smoke test, now closed. Confirmed via
+      `aws sns list-subscriptions-by-topic`: `SubscriptionArn` is a real
+      ARN, not `PendingConfirmation`. Both the invocation-spike alarm and
+      the cost kill switch will actually notify `andystarrrr@gmail.com` now.
+
+The full security review (Phases 0-3) is deployed, smoke-tested against
+the live stack, and its one loose end (the SNS confirmation) is closed.
+
 Live stack outputs (account `060795901917`, region `eu-west-1`) - **updated
-2026-08-24, after at least one more destroy/deploy cycle past the
-previous entry below (the always-DESTROY policy means every ID changes
-on each full cycle - see "Full teardown capability" above). Confirmed
-directly via `aws cloudformation describe-stacks`, not assumed from
-`.env`** - `.env` itself had drifted out of sync with the live stack
-(`API_BASE_URL` pointed at a dead, deleted API Gateway - DNS didn't even
-resolve - which is what a "Failed to fetch" / "you're offline" error in
-local dev turned out to be, not a real connectivity problem):
+2026-08-24, redeploy after the security review (Phases 0-3, minus reserved
+concurrency - see "Full teardown capability" and the reserved-concurrency
+revert above). This is the first deploy carrying the invite gate, threat
+protection, the CSP (report-only), and the cost kill switch - all
+verified live below, not just assumed from the code. `SiteBucketName`
+confirmed via `aws cloudformation describe-stack-resources` (it isn't a
+`CfnOutput`, the others are from `describe-stacks`):**
+```
+ApiUrl            = https://g0bbiheo9k.execute-api.eu-west-1.amazonaws.com
+SiteUrl           = https://ds9wv7ctss47x.cloudfront.net
+UserPoolId        = eu-west-1_PWU4xOAuS
+UserPoolClientId  = 2hiuf3q0tvrep45rtst0iei3nv
+VaultBucketName   = smallstashstack-vaultbucket95cbf29a-9ydlr8li6uc0
+SiteBucketName    = smallstashstack-sitebucket397a1860-uq9w1b4lylc0
+```
+`.env` at the repo root updated to match (gitignored, not shown here).
+
+Previous outputs (now stale, kept only as a record - every value below
+stopped resolving once that stack was destroyed 2026-08-24):
 ```
 ApiUrl            = https://ep63h3wj01.execute-api.eu-west-1.amazonaws.com
 SiteUrl           = https://d3gmlgyc7u2r6p.cloudfront.net
@@ -833,7 +950,6 @@ UserPoolClientId  = 26dt3ssngkenbj8kq66c8eanrn
 VaultBucketName   = smallstashstack-vaultbucket95cbf29a-1qobdurmi9gc
 SiteBucketName    = smallstashstack-sitebucket397a1860-ayivkugarcbb
 ```
-`.env` at the repo root updated to match (gitignored, not shown here).
 **Reminder for next time this happens**: `.env` doesn't auto-update on
 redeploy - if local dev suddenly can't reach the API/Cognito, check
 `.env` against `aws cloudformation describe-stacks --stack-name

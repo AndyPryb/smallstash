@@ -5,6 +5,7 @@
   import ChangeLoginPasswordForm from './ChangeLoginPasswordForm.svelte';
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
   import EntryListItem from './EntryListItem.svelte';
+  import ResizableTextarea from './ResizableTextarea.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
@@ -170,7 +171,7 @@
       <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
     {/if}
     <label>URL <input bind:value={url} /></label>
-    <label>Notes <textarea bind:value={notes}></textarea></label>
+    <label>Notes <ResizableTextarea bind:value={notes} /></label>
     <button type="submit">Add entry</button>
   </form>
 </div>
