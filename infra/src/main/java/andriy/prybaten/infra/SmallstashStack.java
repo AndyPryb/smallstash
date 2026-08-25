@@ -30,7 +30,17 @@ import software.amazon.awscdk.services.cognito.UserPoolTriggers;
 import software.amazon.awscdk.services.cloudfront.BehaviorOptions;
 import software.amazon.awscdk.services.cloudfront.Distribution;
 import software.amazon.awscdk.services.cloudfront.ErrorResponse;
+import software.amazon.awscdk.services.cloudfront.HeadersFrameOption;
+import software.amazon.awscdk.services.cloudfront.HeadersReferrerPolicy;
 import software.amazon.awscdk.services.cloudfront.PriceClass;
+import software.amazon.awscdk.services.cloudfront.ResponseCustomHeader;
+import software.amazon.awscdk.services.cloudfront.ResponseCustomHeadersBehavior;
+import software.amazon.awscdk.services.cloudfront.ResponseHeadersContentTypeOptions;
+import software.amazon.awscdk.services.cloudfront.ResponseHeadersFrameOptions;
+import software.amazon.awscdk.services.cloudfront.ResponseHeadersPolicy;
+import software.amazon.awscdk.services.cloudfront.ResponseHeadersReferrerPolicy;
+import software.amazon.awscdk.services.cloudfront.ResponseHeadersStrictTransportSecurity;
+import software.amazon.awscdk.services.cloudfront.ResponseSecurityHeadersBehavior;
 import software.amazon.awscdk.services.cloudfront.ViewerProtocolPolicy;
 import software.amazon.awscdk.services.cloudfront.origins.S3BucketOrigin;
 import software.amazon.awscdk.services.dynamodb.Attribute;
@@ -307,6 +317,103 @@ public class SmallstashStack extends Stack {
                 .autoDeleteObjects(true)
                 .build();
 
+        // ---------------------------------------------------------------
+        // Security headers + CSP (security review Phase 2)
+        //
+        // This is the highest-value control protecting the Master Password.
+        // Argon2id runs in the browser by design, so the Master Password and
+        // derived Vault Key are necessarily in page memory while a session is
+        // unlocked - which means any script that executes in this origin can
+        // read them straight out of memory and the zero-knowledge model is
+        // gone. A CSP doesn't make XSS impossible, it makes the two usual
+        // delivery paths (injected inline <script>, attacker-hosted JS) fail
+        // closed even if some other bug lets untrusted input reach the DOM.
+        // ---------------------------------------------------------------
+
+        // Verified against the actual build output rather than assumed: Vite
+        // emits no inline <script> or <style> (both are external files with
+        // src/href), there are no inline style="" attributes in web/src, and
+        // no Svelte transitions - which are the usual reason a Svelte app
+        // needs 'unsafe-inline' in style-src. So this can start strict and be
+        // loosened only if the report-only pass proves something needs it.
+        //
+        // 'wasm-unsafe-eval' is REQUIRED, not optional: hash-wasm runs
+        // Argon2id as WebAssembly, and instantiating a WASM module counts as
+        // eval-like under CSP. Without it, unlock silently fails - which
+        // looks like "wrong Master Password", not like a CSP problem.
+        //
+        // The API endpoint is a *:execute-api wildcard rather than the exact
+        // host on purpose: the real endpoint isn't known until HttpApi is
+        // constructed, and HttpApi's CORS in turn needs this distribution's
+        // domain name, so naming it exactly here would be a circular
+        // dependency. Scoped to this region's API Gateway either way.
+        String contentSecurityPolicy = String.join("; ",
+                "default-src 'self'",
+                "script-src 'self' 'wasm-unsafe-eval'",
+                "style-src 'self'",
+                "img-src 'self' data:",
+                "font-src 'self'",
+                "connect-src 'self'"
+                        + " https://cognito-idp." + this.getRegion() + ".amazonaws.com"
+                        + " https://*.execute-api." + this.getRegion() + ".amazonaws.com",
+                "worker-src 'self'",
+                "manifest-src 'self'",
+                "object-src 'none'",
+                "base-uri 'none'",
+                "form-action 'self'",
+                "frame-ancestors 'none'");
+
+        ResponseHeadersPolicy securityHeaders = ResponseHeadersPolicy.Builder.create(this, "SiteSecurityHeaders")
+                .responseHeadersPolicyName("smallstash-security-headers")
+                .comment("HSTS/frame/type/referrer headers + report-only CSP for the PWA")
+                .securityHeadersBehavior(ResponseSecurityHeadersBehavior.builder()
+                        // 1 year + subdomains. Safe here because the only
+                        // host this applies to is the CloudFront domain,
+                        // which is HTTPS-only regardless.
+                        .strictTransportSecurity(ResponseHeadersStrictTransportSecurity.builder()
+                                .accessControlMaxAge(Duration.days(365))
+                                .includeSubdomains(true)
+                                .override(true)
+                                .build())
+                        .contentTypeOptions(ResponseHeadersContentTypeOptions.builder()
+                                .override(true)
+                                .build())
+                        // Nothing here should ever be framed - a password
+                        // manager in an iframe is a clickjacking target.
+                        // Duplicates frame-ancestors above for older browsers.
+                        .frameOptions(ResponseHeadersFrameOptions.builder()
+                                .frameOption(HeadersFrameOption.DENY)
+                                .override(true)
+                                .build())
+                        // Don't leak this app's URLs to anywhere a user
+                        // navigates out to from a vault entry link.
+                        .referrerPolicy(ResponseHeadersReferrerPolicy.builder()
+                                .referrerPolicy(HeadersReferrerPolicy.NO_REFERRER)
+                                .override(true)
+                                .build())
+                        .build())
+                // Deliberately the *report-only* header, not the enforcing
+                // one - hence a custom header rather than
+                // securityHeadersBehavior's contentSecurityPolicy, which only
+                // emits the enforcing variant. The browser logs what it
+                // *would* have blocked instead of blocking it, so a policy
+                // that's missing something breaks nothing while we find out.
+                //
+                // !! FLIP TO ENFORCING BEFORE STORING REAL SECRETS !!
+                // Rename this header to "Content-Security-Policy" once a full
+                // manual pass (login, signup, vault CRUD, MFA, offline
+                // unlock, Master Password change) produces zero violations in
+                // the browser console. Until then this is documentation, not
+                // protection. Tracked in docs/todo.md.
+                .customHeadersBehavior(ResponseCustomHeadersBehavior.builder()
+                        .customHeaders(List.of(ResponseCustomHeader.builder()
+                                .header("Content-Security-Policy-Report-Only")
+                                .value(contentSecurityPolicy)
+                                .override(true)
+                                .build()))
+                        .build())
+                .build();
+
         // SPA routing fix: client-side routes like /vault/entry/42 have no
         // matching S3 key, so a refresh on one 403s (bucket is private, no
         // "key doesn't exist" distinction reaches CloudFront as 404) -
@@ -316,6 +423,7 @@ public class SmallstashStack extends Stack {
                 .defaultBehavior(BehaviorOptions.builder()
                         .origin(S3BucketOrigin.withOriginAccessControl(siteBucket))
                         .viewerProtocolPolicy(ViewerProtocolPolicy.REDIRECT_TO_HTTPS)
+                        .responseHeadersPolicy(securityHeaders)
                         .build())
                 .defaultRootObject("index.html")
                 .errorResponses(List.of(
