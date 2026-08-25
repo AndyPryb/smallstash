@@ -10,6 +10,7 @@
    * confirmLoginPasswordReset, architecture.md §5).
    */
   import { requestLoginPasswordReset, confirmLoginPasswordReset } from '../session.js';
+  import { friendlyAuthErrorMessage } from '../errors.js';
   import PasswordField from './PasswordField.svelte';
 
   /** @type {{ oncomplete: () => void, oncancel: () => void }} */
@@ -54,7 +55,7 @@
       await confirmLoginPasswordReset(email, code, newPassword);
       oncomplete();
     } catch (err) {
-      error = err.message ?? String(err);
+      error = friendlyAuthErrorMessage(err);
     } finally {
       busy = false;
     }

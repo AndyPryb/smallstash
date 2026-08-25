@@ -6,6 +6,7 @@
    * changeLoginPassword for why this needs an online session.
    */
   import { changeLoginPassword } from '../session.js';
+  import { friendlyAuthErrorMessage } from '../errors.js';
   import PasswordField from './PasswordField.svelte';
 
   /** @type {{ onclose: () => void }} */
@@ -34,7 +35,7 @@
       done = true;
       currentLoginPassword = newLoginPassword = confirmNewLoginPassword = '';
     } catch (err) {
-      error = err.message ?? String(err);
+      error = friendlyAuthErrorMessage(err);
     } finally {
       busy = false;
     }

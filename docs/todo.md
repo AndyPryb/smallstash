@@ -1456,24 +1456,35 @@ chosen vehicle.
       `PUT /keys`.
 - [ ] **Password reset** (`ForgotPasswordForm.svelte`) - same shape as
       registration above, needs an emailed code, human in the loop again.
-- [ ] **The `null`-in-error-message bug** reported 2026-08-25 ("Change
-      Login Password... Password did not conform with policy: null").
-      Diagnosed already, not yet fixed: `"did not conform with policy"`
-      does not appear anywhere in this repo's source - confirmed by grep -
-      so this is AWS Cognito's own `InvalidPasswordException.message`,
-      passed straight through by `err.message ?? String(err)`
-      (`ChangeLoginPasswordForm.svelte`), not a client-side formatting bug.
-      The "null" is AWS's backend leaving a template slot unfilled - not
-      fixable by changing a template string that doesn't exist in our
-      code. Available fix: catch this specific exception (by name or by
-      matching the message prefix) and substitute a fixed, friendly
-      message instead of surfacing Cognito's raw text verbatim. Deferred
-      to the logged-in test phase since that's where it's reachable
-      (`ChangeLoginPasswordForm` requires an active session) - worth
-      checking whether `SignupForm`'s initial `SignUp` call can hit the
-      same Cognito exception (e.g. a policy-compliant but known-breached
-      password, now that Cognito Plus/threat protection is live) since
-      that code path shares the same `err.message ?? String(err)` pattern.
+- [x] **The `null`-in-error-message bug - fixed (2026-08-25, not
+      deployed).** Reported on Change Login Password
+      ("Password did not conform with policy: null"); confirmed by grep
+      that `"did not conform with policy"` appears nowhere in this repo's
+      source, so it's AWS Cognito's own `InvalidPasswordException.message`
+      (the "null" is AWS's backend leaving a template slot unfilled),
+      passed straight through by `err.message ?? String(err)` - not a
+      client-side formatting bug, and not fixable by changing a template
+      string that doesn't exist in our code.
+      `web/src/lib/errors.js`'s `friendlyAuthErrorMessage()` matches on the
+      Cognito client library's `error.code`/`error.name` (confirmed both
+      are set to `'InvalidPasswordException'` by reading
+      `node_modules/amazon-cognito-identity-js/lib/Client.js`, not
+      guessed) and substitutes a real, useful message. Wired into all
+      three places a new Cognito login password is submitted -
+      `ChangeLoginPasswordForm`, `SignupForm`'s `submitRegister` (the
+      client-side pattern check there doesn't catch a policy-compliant but
+      known-breached password, which Cognito Plus/threat protection can
+      still reject with the same exception), and `ForgotPasswordForm`'s
+      reset-confirm step (had the identical exposure, no pattern check at
+      all).
+      Verified: `web/src/lib/errors.test.js` (5 tests, matches the real
+      Cognito client library's error shape) plus `npm test` (97, up from
+      92) and `npm run build` both clean.
+      `web/e2e/change-login-password.spec.js` updated to assert the fixed
+      behaviour and reconfirmed it still correctly fails against the live
+      (undeployed) site - same pattern as
+      `security-headers.spec.js`'s CSP-enforcing check. Will pass once
+      deployed.
 - [ ] **Decide whether Playwright also replaces the "Svelte component
       tests" item below**, or sits alongside it. Component tests and E2E
       answer different questions; doing both is defensible, doing neither
