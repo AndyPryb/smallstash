@@ -30,7 +30,7 @@ one-line pointer.
 
 4. **Infra-as-code tool.**
    **Status: Resolved — AWS CDK (Java)**, confirmed. New decisions made
-   alongside it (SRP-only app client, MFA, dedicated deploy IAM user, CDK
+   alongside it (SRP-only app client, dedicated deploy IAM user, CDK
    auto-wiring the Lambda security env vars) are tracked in
    [todo.md](todo.md) until the `infra/` CDK module actually lands.
 

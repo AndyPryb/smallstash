@@ -102,10 +102,10 @@ src/lib/components/  Svelte UI components.
   the real (fake-indexeddb-backed) cache throughout; only the
   network-touching boundaries (`auth/cognito.js`, `api/client.js`,
   `config.js`) are replaced via `node:test`'s `mock.module()`. Covers the
-  full sign-in/MFA/offline-unlock/signup/save/change-Master-Password/
+  full sign-in/offline-unlock/signup/save/change-Master-Password/
   change-login-password/login-password-reset flows (happy paths and the
-  actual failure modes - wrong password, wrong MFA code, offline write
-  rejection, no active session) plus the inactivity auto-lock timer (via
+  actual failure modes - wrong password, offline write rejection, no
+  active session) plus the inactivity auto-lock timer (via
   `node:test`'s fake timers - no real 15-minute wait).
 - `config.test.js` — the runtime `/config.json` fetch (see "Setup" above):
   throws if read before `loadConfig()` resolves, only fetches once, and
@@ -123,5 +123,5 @@ flag rather than bolt on unprompted. See `docs/todo.md`.
 ## What's not built yet
 
 See `docs/todo.md` → "PWA kickoff scaffold" for the current list (signup
-UI, password generator, offline-unlock UI, MFA UI, hosting for the built
-output, etc.).
+UI, password generator, offline-unlock UI, hosting for the built output,
+etc.).

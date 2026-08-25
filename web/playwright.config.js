@@ -30,7 +30,7 @@ export default defineConfig({
   // Serial, not parallel: several specs share one live Cognito pool (the
   // invite code, and later the one shared test account) - concurrent runs
   // risk racing each other (e.g. two tests colliding on the same account's
-  // MFA/session state). Not worth the speed for a suite this size.
+  // session state). Not worth the speed for a suite this size.
   fullyParallel: false,
   workers: 1,
 

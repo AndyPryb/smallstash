@@ -28,7 +28,6 @@ import software.amazon.awscdk.services.cognito.AuthFlow;
 import software.amazon.awscdk.services.cognito.AutoVerifiedAttrs;
 import software.amazon.awscdk.services.cognito.FeaturePlan;
 import software.amazon.awscdk.services.cognito.Mfa;
-import software.amazon.awscdk.services.cognito.MfaSecondFactor;
 import software.amazon.awscdk.services.cognito.PasswordPolicy;
 import software.amazon.awscdk.services.cognito.SignInAliases;
 import software.amazon.awscdk.services.cognito.StandardThreatProtectionMode;
@@ -86,7 +85,7 @@ import java.util.Map;
 /**
  * Everything from docs/architecture.md in one CDK stack: DynamoDB
  * (profile + KDF/wrapped-key metadata, ADR-0001), S3 (whole-vault
- * ciphertext blob), Cognito (SRP-only + optional TOTP MFA, docs/todo.md),
+ * ciphertext blob), Cognito (SRP-only, no MFA, docs/todo.md),
  * Lambda (the Micronaut jar), and HTTP API fronted by a native Cognito JWT
  * authorizer.
  *
@@ -182,7 +181,7 @@ public class SmallstashStack extends Stack {
                 .build();
 
         // ---------------------------------------------------------------
-        // Auth (Cognito) - docs/todo.md: SRP-only, TOTP MFA optional
+        // Auth (Cognito) - docs/todo.md: SRP-only, no MFA (see below)
         // ---------------------------------------------------------------
 
         // The invite code gating self-signup. Deliberately NOT hardcoded in
@@ -243,18 +242,12 @@ public class SmallstashStack extends Stack {
                 .signInAliases(SignInAliases.builder().email(true).build())
                 .autoVerify(AutoVerifiedAttrs.builder().email(true).build())
                 .accountRecovery(AccountRecovery.EMAIL_ONLY)
-                // !! STAYS OPTIONAL UNTIL THE CLIENT CAN ENROL A TOTP DEVICE !!
-                // Mfa.REQUIRED is the intended end state and is deliberately
-                // NOT set yet: with TOTP as the only second factor, Cognito
-                // answers the first sign-in of an un-enrolled user with an
-                // MFA_SETUP challenge, and web/'s cognito.js has no
-                // associateSoftwareToken/verifySoftwareToken flow to answer it
-                // (MfaCodeForm only *responds* to a challenge for an
-                // already-enrolled device). Flipping this without building
-                // enrolment first locks every user out, including you. See
-                // docs/todo.md.
-                .mfa(Mfa.OPTIONAL)
-                .mfaSecondFactor(MfaSecondFactor.builder().otp(true).sms(false).build())
+                // No MFA - a deliberate product decision (2026-08-25), not a
+                // gap: the vault's real second factor is the Master Password
+                // itself, which a stolen/lost phone still doesn't have, so
+                // Cognito-level MFA would add login friction on every use
+                // without closing a gap that matters here.
+                .mfa(Mfa.OFF)
                 // Plus tier = threat protection: compromised-credential
                 // detection (the login password checked against known-breach
                 // corpora) and risk-based adaptive auth scoring IP reputation
@@ -483,22 +476,27 @@ public class SmallstashStack extends Stack {
                                 .override(true)
                                 .build())
                         .build())
-                // Deliberately the *report-only* header, not the enforcing
-                // one - hence a custom header rather than
-                // securityHeadersBehavior's contentSecurityPolicy, which only
-                // emits the enforcing variant. The browser logs what it
-                // *would* have blocked instead of blocking it, so a policy
-                // that's missing something breaks nothing while we find out.
+                // ENFORCING as of 2026-08-25 - flipped from
+                // Content-Security-Policy-Report-Only after
+                // web/e2e/login-authenticated.spec.js passed against the
+                // live site with zero CSP violations on an authenticated
+                // page (the one that matters: 'wasm-unsafe-eval', guarding
+                // hash-wasm's Argon2id, is only reachable post-login). Still
+                // a custom header rather than
+                // securityHeadersBehavior's contentSecurityPolicy - that
+                // helper only emits this same enforcing header, so there's
+                // no functional difference, but keeping it here means the
+                // whole policy stays in one place (the string above) instead
+                // of split across two CDK constructs.
                 //
-                // !! FLIP TO ENFORCING BEFORE STORING REAL SECRETS !!
-                // Rename this header to "Content-Security-Policy" once a full
-                // manual pass (login, signup, vault CRUD, MFA, offline
-                // unlock, Master Password change) produces zero violations in
-                // the browser console. Until then this is documentation, not
-                // protection. Tracked in docs/todo.md.
+                // If this ever needs to go back to report-only (e.g. after
+                // a directive change that needs re-validating), rename the
+                // header back to "Content-Security-Policy-Report-Only" and
+                // re-run the E2E suite before flipping forward again -
+                // don't just trust that nothing changed.
                 .customHeadersBehavior(ResponseCustomHeadersBehavior.builder()
                         .customHeaders(List.of(ResponseCustomHeader.builder()
-                                .header("Content-Security-Policy-Report-Only")
+                                .header("Content-Security-Policy")
                                 .value(contentSecurityPolicy)
                                 .override(true)
                                 .build()))

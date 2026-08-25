@@ -104,8 +104,9 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 - PWA client (`web/`): **built and deployed**, see
   [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA on
   S3 + CloudFront (OAC-fronted); login (Cognito SRP), signup, vault CRUD,
-  password generator, offline unlock, MFA UI, change-Master-Password, and
-  inactivity auto-lock all exist. `npm test` (**97 tests**, incl. Argon2id
+  password generator, offline unlock, change-Master-Password, and
+  inactivity auto-lock all exist. No MFA — deliberately not built, see
+  architecture.md §5. `npm test` (**97 tests**, incl. Argon2id
   cross-checked against `@noble/hashes` + an RFC 9106 vector) and
   `npm run build` verified clean. Much of the UI has only ever been
   verified by unit test + build, **not by a real browser run-through** —
@@ -121,14 +122,12 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   S3/DynamoDB Deny to the **Lambda execution role** — root and
   `smallstash-deployer` stay untouched; recovery is detaching the policy,
   no redeploy).
-- ⚠️ **Two things look done but aren't, and both fail quietly:** the CSP
-  ships as **`Content-Security-Policy-Report-Only`** (logs violations,
-  blocks nothing) until the header is renamed; and the SNS alert email
-  needs its **AWS confirmation link clicked** or the alarm notifies nobody.
-- 🚫 **Do not set `Mfa.REQUIRED`.** It looks like a one-line flip and is
-  not: `web/` has no TOTP *enrolment* flow, so Cognito's `MFA_SETUP`
-  challenge would hang `signIn` and lock out every user. See
-  [docs/todo.md](docs/todo.md).
+- The CSP was **flipped to enforcing in code (2026-08-25)**, after
+  `web/e2e/login-authenticated.spec.js` passed with zero violations on an
+  authenticated page — but **not deployed yet**, so the live site still
+  sends the old `Content-Security-Policy-Report-Only` header until the
+  next `cdk deploy`. The SNS alert email needs its **AWS confirmation link
+  clicked** or the alarm notifies nobody (already done as of 2026-08-25).
 - Not yet built anywhere: CI (no workflow runs `mvn test` / `npm test`),
   Svelte component tests, browser/E2E tests (deliberately deferred until
   the security phases land — see [docs/todo.md](docs/todo.md)).

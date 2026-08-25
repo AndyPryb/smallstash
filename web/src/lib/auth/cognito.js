@@ -59,12 +59,6 @@ export function signIn({ userPoolId, clientId, email, password }) {
       newPasswordRequired: () => {
         reject(new Error('Cognito requires a new password for this account'));
       },
-      mfaRequired: () => {
-        reject(new MfaRequiredError(cognitoUser));
-      },
-      totpRequired: () => {
-        reject(new MfaRequiredError(cognitoUser));
-      },
     });
   });
 }
@@ -120,37 +114,6 @@ export function confirmSignUp({ userPoolId, clientId, email, code }) {
   });
 }
 
-/** Thrown when a login succeeds against the password but still needs an MFA code. */
-export class MfaRequiredError extends Error {
-  /** @param {CognitoUser} cognitoUser mid-flow user, call sendMFACode on it next */
-  constructor(cognitoUser) {
-    super('MFA code required');
-    this.name = 'MfaRequiredError';
-    this.cognitoUser = cognitoUser;
-  }
-}
-
-/**
- * @param {import('amazon-cognito-identity-js').CognitoUser} cognitoUser from MfaRequiredError
- * @param {string} code
- * @returns {Promise<{ idToken: string, accessToken: string, expiresAt: number }>}
- */
-export function submitMfaCode(cognitoUser, code) {
-  return new Promise((resolve, reject) => {
-    cognitoUser.sendMFACode(code, {
-      onSuccess: (session) => {
-        resolve({
-          idToken: session.getIdToken().getJwtToken(),
-          accessToken: session.getAccessToken().getJwtToken(),
-          expiresAt: session.getIdToken().getExpiration() * 1000,
-          cognitoUser,
-        });
-      },
-      onFailure: reject,
-    });
-  });
-}
-
 /**
  * Step 1 of Cognito's "forgot password" flow for the login password -
  * distinct from the vault's Recovery Key, which recovers the Master
@@ -200,9 +163,9 @@ export function confirmForgotPassword({ userPoolId, clientId, email, code, newPa
 
 /**
  * Change the login password for an already-authenticated user - requires
- * the CognitoUser instance from a just-completed signIn/submitMfaCode
- * (carries the session Cognito's ChangePassword API needs), not just an
- * email. See session.js's changeLoginPassword for the caller-facing side.
+ * the CognitoUser instance from a just-completed signIn (carries the
+ * session Cognito's ChangePassword API needs), not just an email. See
+ * session.js's changeLoginPassword for the caller-facing side.
  *
  * @param {CognitoUser} cognitoUser
  * @param {string} oldPassword

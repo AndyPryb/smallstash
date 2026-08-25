@@ -46,17 +46,13 @@ globalThis.localStorage = new FakeLocalStorage();
 // Must be set up before session.js is imported - mock.module() intercepts
 // future resolutions of the given specifier, including session.js's own
 // static imports of these same files.
-const { MfaRequiredError } = await import('./auth/cognito.js');
-
 const cognitoMocks = {
   signIn: mock.fn(),
   signUp: mock.fn(),
   confirmSignUp: mock.fn(),
-  submitMfaCode: mock.fn(),
   forgotPassword: mock.fn(),
   confirmForgotPassword: mock.fn(),
   changePassword: mock.fn(),
-  MfaRequiredError,
 };
 mock.module('./auth/cognito.js', { namedExports: cognitoMocks });
 
@@ -129,7 +125,6 @@ async function primeOfflineCache({ masterPassword, sub = randomSub(), vaultDocum
 beforeEach(() => {
   // Reset session.js's own module-level state...
   session.clearSession();
-  session.cancelMfaLogin();
   // ...and every mock's call history/implementation, so one test's setup
   // can't leak into the next.
   for (const fn of [...Object.values(cognitoMocks), ...Object.values(apiMocks)]) {
@@ -171,80 +166,6 @@ test('signInAndUnlock: wrong Master Password rejects and leaves no session', asy
     WrongSecretError,
   );
   assert.equal(session.isUnlocked(), false);
-});
-
-test('signInAndUnlock: MFA-enrolled account rejects with MfaRequiredError and marks MFA pending', async () => {
-  cognitoMocks.signIn.mock.mockImplementation(async () => {
-    throw new MfaRequiredError({ fakeCognitoUser: true });
-  });
-
-  await assert.rejects(
-    () => session.signInAndUnlock('person@example.com', 'login-password', 'master'),
-    MfaRequiredError,
-  );
-  assert.equal(session.isMfaPending(), true);
-  assert.equal(session.isUnlocked(), false);
-});
-
-// --- MFA completion ------------------------------------------------------
-
-test('completeMfaLogin: finishes the paused sign-in without re-collecting passwords', async () => {
-  const email = 'person@example.com';
-  const masterPassword = 'a master password';
-  const { sub } = await primeOnlineAccount({ masterPassword });
-
-  cognitoMocks.signIn.mock.mockImplementation(async () => {
-    throw new MfaRequiredError({ fakeCognitoUser: true });
-  });
-  await assert.rejects(() => session.signInAndUnlock(email, 'login-password', masterPassword), MfaRequiredError);
-  assert.equal(session.isMfaPending(), true);
-
-  cognitoMocks.submitMfaCode.mock.mockImplementation(async () => ({ idToken: fakeIdToken(sub) }));
-
-  const decrypted = await session.completeMfaLogin('123456');
-
-  assert.deepEqual(decrypted, { entries: [] });
-  assert.equal(session.isMfaPending(), false);
-  assert.equal(session.isUnlocked(), true);
-  assert.deepEqual(session.getLastAccount(), { email, sub });
-});
-
-test('completeMfaLogin: a wrong code leaves the pending attempt intact for retry', async () => {
-  cognitoMocks.signIn.mock.mockImplementation(async () => {
-    throw new MfaRequiredError({ fakeCognitoUser: true });
-  });
-  await assert.rejects(
-    () => session.signInAndUnlock('person@example.com', 'login-password', 'master'),
-    MfaRequiredError,
-  );
-
-  cognitoMocks.submitMfaCode.mock.mockImplementation(async () => {
-    throw new Error('Incorrect code');
-  });
-  await assert.rejects(() => session.completeMfaLogin('000000'), /Incorrect code/);
-
-  // Unlike a completed attempt, a failed *code* doesn't discard the
-  // in-progress login - the user should be able to just try again.
-  assert.equal(session.isMfaPending(), true);
-});
-
-test('completeMfaLogin: rejects immediately if no MFA login is pending', async () => {
-  await assert.rejects(() => session.completeMfaLogin('123456'), /no sign-in is currently waiting/i);
-});
-
-test('cancelMfaLogin: clears the pending attempt', async () => {
-  cognitoMocks.signIn.mock.mockImplementation(async () => {
-    throw new MfaRequiredError({ fakeCognitoUser: true });
-  });
-  await assert.rejects(
-    () => session.signInAndUnlock('person@example.com', 'login-password', 'master'),
-    MfaRequiredError,
-  );
-  assert.equal(session.isMfaPending(), true);
-
-  session.cancelMfaLogin();
-
-  assert.equal(session.isMfaPending(), false);
 });
 
 // --- offline unlock --------------------------------------------------

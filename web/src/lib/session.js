@@ -2,8 +2,6 @@ import {
   signIn,
   signUp as cognitoSignUp,
   confirmSignUp as cognitoConfirmSignUp,
-  submitMfaCode,
-  MfaRequiredError,
   forgotPassword as cognitoForgotPassword,
   confirmForgotPassword as cognitoConfirmForgotPassword,
   changePassword as cognitoChangePassword,
@@ -25,10 +23,6 @@ import {
   isKeyMaterialStale,
 } from './cache/db.js';
 import { config } from './config.js';
-
-// Re-exported so callers (App.svelte) only need to import from session.js,
-// not reach into auth/cognito.js directly for this one type check.
-export { MfaRequiredError };
 
 /**
  * Ties the pieces together: Cognito login -> fetch/cache key material ->
@@ -138,17 +132,6 @@ export function getLastAccount() {
 }
 
 /**
- * Set when a signInAndUnlock() attempt is paused mid-flow by Cognito
- * demanding an MFA code (see auth/cognito.js's MfaRequiredError) - holds
- * everything completeMfaLogin() needs to finish that same attempt without
- * making the user re-enter their login password or Master Password. Cleared
- * only once the MFA code itself is accepted (see completeMfaLogin) - a wrong
- * code should let the user retry the code, not restart the whole login.
- * @type {{ cognitoUser: import('amazon-cognito-identity-js').CognitoUser, email: string, masterPassword: string } | null}
- */
-let pendingMfa = null;
-
-/**
  * Online path: sign in via Cognito SRP, fetch key material + vault from the
  * API, derive/unwrap, decrypt. Also refreshes the offline cache so a later
  * unlockOffline() has something current to work with.
@@ -157,51 +140,10 @@ let pendingMfa = null;
  * @param {string} loginPassword Cognito password - independent of masterPassword
  * @param {string} masterPassword vault Master Password
  * @returns {Promise<object>} the decrypted vault document
- * @throws {MfaRequiredError} if the account has MFA enabled - catch this
- *   specifically, prompt for a code, then call completeMfaLogin(code)
  */
 export async function signInAndUnlock(email, loginPassword, masterPassword) {
-  let idToken, sub, cognitoUser;
-  try {
-    ({ idToken, sub, cognitoUser } = await authenticate(email, loginPassword));
-  } catch (err) {
-    if (err instanceof MfaRequiredError) {
-      pendingMfa = { cognitoUser: err.cognitoUser, email, masterPassword };
-    }
-    throw err;
-  }
+  const { idToken, sub, cognitoUser } = await authenticate(email, loginPassword);
   return finishOnlineUnlock(idToken, sub, masterPassword, cognitoUser);
-}
-
-/**
- * Completes a signInAndUnlock() attempt that was paused by an
- * MfaRequiredError.
- *
- * @param {string} code the code from the user's authenticator app
- * @returns {Promise<object>} the decrypted vault document
- */
-export async function completeMfaLogin(code) {
-  if (!pendingMfa) throw new Error('No sign-in is currently waiting on an MFA code');
-  const { cognitoUser, email, masterPassword } = pendingMfa;
-
-  const { idToken, cognitoUser: authedCognitoUser } = await submitMfaCode(cognitoUser, code);
-  // Only cleared on success - a wrong code should be retryable without
-  // forcing the user back through email/login password/Master Password.
-  pendingMfa = null;
-
-  const sub = decodeSub(idToken);
-  rememberAccount(email, sub);
-  return finishOnlineUnlock(idToken, sub, masterPassword, authedCognitoUser);
-}
-
-/** Abandon a pending MFA login (e.g. user clicks "cancel" on the code prompt). */
-export function cancelMfaLogin() {
-  pendingMfa = null;
-}
-
-/** @returns {boolean} whether a signInAndUnlock() attempt is waiting on an MFA code */
-export function isMfaPending() {
-  return pendingMfa !== null;
 }
 
 async function finishOnlineUnlock(idToken, sub, masterPassword, cognitoUser) {

@@ -17,20 +17,19 @@ test.describe('CloudFront security headers', () => {
     expect(headers['referrer-policy']).toBe('no-referrer');
   });
 
-  test('CSP is present as Report-Only, not yet enforcing', async ({ page }) => {
+  test('CSP is present and enforcing, not report-only', async ({ page }) => {
     const response = await page.goto('/');
     const headers = response.headers();
 
-    // Whichever of these two is present tells us the current rollout state
-    // - see docs/todo.md "Flip the CSP from report-only to enforcing".
-    // This assertion is deliberately strict about *which* header exists:
-    // if this starts failing because the enforcing header appeared instead,
-    // that's the flip having happened, not a bug - update the assertion at
-    // the same time as the flip, don't just loosen it.
-    expect(headers['content-security-policy-report-only']).toBeTruthy();
-    expect(headers['content-security-policy']).toBeUndefined();
+    // Flipped 2026-08-25, after login-authenticated.spec.js passed with
+    // zero violations on an authenticated page. Deliberately strict about
+    // *which* header exists: if this starts failing because report-only
+    // reappeared, that's a real regression in the rollout state, not a
+    // reason to loosen this assertion.
+    expect(headers['content-security-policy']).toBeTruthy();
+    expect(headers['content-security-policy-report-only']).toBeUndefined();
 
-    const csp = headers['content-security-policy-report-only'];
+    const csp = headers['content-security-policy'];
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
     expect(csp).toContain("object-src 'none'");
