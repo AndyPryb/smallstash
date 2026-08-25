@@ -101,22 +101,26 @@ public class SmallstashStack extends Stack {
     public SmallstashStack(final Construct scope, final String id, final StackProps props) {
         super(scope, id, props);
 
-        // DESTROY *only* while this stack still holds nothing but test data.
-        // Deliberate: the stack gets destroyed/recreated frequently during
-        // development, and RETAIN turns every cycle into a manual cleanup of
-        // orphaned resources (worse with a fixed table name - the next deploy
-        // fails outright because `smallstash-users` already exists).
+        // DESTROY - a deliberate, standing decision (2026-08-25), not a
+        // pre-production placeholder waiting to be flipped. RETAIN was
+        // evaluated and rejected: on `cdk destroy` it leaves resources
+        // orphaned rather than deleted, and getting them back under stack
+        // management afterward is its own project - S3 buckets and DynamoDB
+        // tables support CloudFormation resource import (`cdk import`), but
+        // Cognito User Pools do not (a known, longstanding gap - see
+        // https://github.com/aws-cloudformation/cloudformation-coverage-roadmap/issues/1485).
+        // A retained pool would just sit there unusable, so RETAIN alone
+        // wouldn't even deliver on its own promise for one of these three
+        // resources. DESTROY also keeps the destroy/recreate loop cheap,
+        // which matters while this is under active development.
         //
-        // !! MUST FLIP TO RETAIN BEFORE THE FIRST REAL SECRET IS STORED !!
-        // This was briefly RETAIN (security review finding H-3) and was
-        // reverted on purpose to keep the pre-production destroy/recreate loop
-        // cheap. Tracked in docs/todo.md - "Full teardown capability" and the
-        // security review's Phase 0 section both carry the reminder.
-        //
-        // Why it matters more than "we'd lose the test vaults": the S3 blob is
-        // versioned, so it has some rollback protection, but the DynamoDB KEYS
-        // item (the wrapped Vault Key) is a single copy. Lose that and every
-        // surviving S3 version is permanently undecryptable ciphertext.
+        // The accepted risk: once real secrets live here, a `cdk destroy` -
+        // accidental or deliberate - permanently deletes every vault, no
+        // recovery. Known and accepted, not overlooked. If that ever needs
+        // to change, `deletionProtection(true)` on the table and pool (both
+        // support it directly) is a cheaper, simpler guard than RETAIN was -
+        // it blocks the delete outright rather than leaving an orphan to
+        // untangle afterward - see docs/todo.md if this gets revisited.
         RemovalPolicy dataRemovalPolicy = RemovalPolicy.DESTROY;
 
         // ---------------------------------------------------------------
@@ -130,8 +134,7 @@ public class SmallstashStack extends Stack {
         //
         // autoDeleteObjects pairs with DESTROY above - a versioned bucket
         // can't be deleted while it still has object versions in it, so
-        // without this every `cdk destroy` fails halfway. Drop it at the same
-        // time dataRemovalPolicy flips to RETAIN.
+        // without this every `cdk destroy` fails halfway.
         Bucket vaultBucket = Bucket.Builder.create(this, "VaultBucket")
                 .versioned(true)
                 .encryption(BucketEncryption.S3_MANAGED)
@@ -157,9 +160,7 @@ public class SmallstashStack extends Stack {
 
         // DynamoDB table names are only unique per account+region, so a fixed
         // name is safe here. This is the KDF salt/wrapped-key metadata every
-        // login depends on - add `.deletionProtection(true)` here at the same
-        // time dataRemovalPolicy flips to RETAIN (see above); it's omitted for
-        // now only because it blocks the destroy/recreate loop.
+        // login depends on.
         Table usersTable = Table.Builder.create(this, "UsersTable")
                 .tableName("smallstash-users")
                 .partitionKey(Attribute.builder().name("pk").type(AttributeType.STRING).build())
@@ -268,9 +269,6 @@ public class SmallstashStack extends Stack {
                 .lambdaTriggers(UserPoolTriggers.builder()
                         .preSignUp(preSignUp)
                         .build())
-                // `.deletionProtection(true)` goes here too when
-                // dataRemovalPolicy flips to RETAIN - same reasoning as the
-                // table above.
                 .removalPolicy(dataRemovalPolicy)
                 .build();
 

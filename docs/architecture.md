@@ -653,14 +653,17 @@ as code, every AWS resource this project needs:
    intentional (§5) — the alternative is shipping an ungated or
    default-coded signup endpoint. `.env` is gitignored, so a fresh clone
    has to set it.
-2. **All three data resources are `RemovalPolicy.DESTROY`**, not `RETAIN`
-   as earlier versions of this doc claimed. That is a *deliberate,
-   temporary* choice for the pre-production destroy/recreate loop, marked
-   with an inline `!! MUST FLIP TO RETAIN BEFORE THE FIRST REAL SECRET !!`
-   comment in `SmallstashStack.java`. **Flipping it is the gate on storing
-   real secrets** — `cdk destroy` currently deletes every vault, and the
-   DynamoDB `KEYS` item has no versioning to fall back on (§4a). See
-   [todo.md](todo.md)'s security review for the exact change list.
+2. **All three data resources are `RemovalPolicy.DESTROY`, permanently —
+   a standing decision (2026-08-25), not a pre-production placeholder.**
+   RETAIN was evaluated and rejected (see `SmallstashStack.java`'s comment
+   above `dataRemovalPolicy` for the full reasoning — orphaned-not-deleted
+   resources on destroy, and Cognito User Pools can't be re-imported into
+   CloudFormation at all, a known AWS gap, so RETAIN wouldn't have
+   delivered full recovery anyway). **Accepted risk**: `cdk destroy`
+   permanently deletes every vault once real secrets are stored, and the
+   DynamoDB `KEYS` item has no versioning to fall back on (§4a).
+   `deletionProtection(true)` on the table and pool is the lighter-weight
+   guard if this tolerance ever changes — not RETAIN.
 
 CORS currently allows `http://localhost:5173` alongside the CloudFront
 origin — fine for dev, tracked for removal before this is treated as
