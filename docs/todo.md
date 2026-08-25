@@ -4,6 +4,37 @@ Things raised in conversation that are decided-but-not-built, or
 deliberately deferred. Check items off / delete them as they land instead
 of leaving them stale.
 
+## 🚀 DEPLOYED 2026-08-25 — read this before trusting any "not deployed" tag below
+
+Everything from the security review (Phases 0–3), MFA removal, the CSP
+enforcing flip, the offline-boot fix, and the null-bug friendlier message
+is now **live** on the same stack (in-place update — pool/API/bucket IDs
+unchanged, see "Live stack outputs" below). Verified post-deploy, not
+assumed: `Content-Security-Policy` header is the real enforcing one,
+Cognito `MfaConfiguration: OFF`, all 5 registered users survived
+untouched. Individual `**not deployed**` annotations scattered through
+this file below are now stale — they were accurate when written, during
+the several-day gap between implementing and deploying, and are kept as
+historical record rather than mass-edited. Treat this banner as the
+override.
+
+One deploy attempt failed first, self-corrected within the same session:
+CloudFront rejects `Content-Security-Policy` set via a custom header (the
+name is reserved for `securityHeadersBehavior.contentSecurityPolicy`
+instead) - confirmed against AWS's own docs, fixed, rolled back cleanly
+with zero data/downtime impact before the fix landed (commit `ee294f3`).
+
+**Not yet done, first thing worth picking up next session**: re-run
+`npx playwright test` (in `web/`) against the live URL. Several specs were
+written to assert the *post-deploy* state and were last known failing
+only because the deploy hadn't happened yet - `security-headers.spec.js`'s
+CSP-enforcing check, `change-login-password.spec.js`'s friendly-message
+check, and `offline-unlock.spec.js` (still carries a `test.fail()`
+annotation from before its fix was deployed - remove it once confirmed
+passing for real). Expect close to 16/16 clean; anything still red is a
+real, new finding worth investigating rather than an artifact of the
+undeployed state.
+
 ## Restyle the UI (2026-08-25)
 
 Raised in conversation, not scoped yet - the app's visual design has never

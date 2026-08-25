@@ -93,48 +93,58 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 - Backend (`vault`, `keys`, `security`, `error`, `config` packages):
   written, compiles clean, LocalStack integration tests written but not
   yet run end-to-end here (needs Docker, unavailable in this sandbox).
-- Infra (`infra/`): **currently NOT deployed.** `SmallstashStack` is
-  `DELETE_COMPLETE` (verified 2026-08-24) — deliberately torn down between
-  pre-production iterations, which is what the DESTROY removal policy is
-  for. It *was* live 2026-08-23 and the design is proven (JWT enforcement
-  verified against the real API, unauthenticated → 401), but nothing runs
-  right now. ⚠️ **Every "live stack output" in
-  [docs/todo.md](docs/todo.md) and in `.env` is dead** — pool id, client
-  id, API URL, bucket names all vanished with the stack. Refresh them from
-  `aws cloudformation describe-stacks` after the next deploy; stale `.env`
-  values have already caused one confusing "you're offline" incident.
+- Infra (`infra/`): **deployed and live** (2026-08-25, in-place update to
+  the same stack — `SmallstashStack` ARN, pool ID `eu-west-1_<pool-id>`,
+  API URL, and bucket names all unchanged from the "Live stack outputs" in
+  [docs/todo.md](docs/todo.md); `.env` there is current). **The entire
+  security review (Phases 0–3) plus MFA removal, the CSP enforcing flip,
+  the offline-boot fix, and the null-bug friendlier message are all live**
+  — verified post-deploy, not assumed: `Content-Security-Policy` header is
+  the real enforcing one (not `-Report-Only`), Cognito `MfaConfiguration:
+  OFF`, and all 5 registered users (`andystarrrr`, `<user-2>`,
+  `<demo-user>`, `<user-3>`, `<user-4>`) survived the deploy
+  untouched (`CONFIRMED`, in-place update as `cdk diff` predicted — no
+  data loss, no downtime).
+- One deploy attempt failed first and is worth knowing about if it
+  recurs: CloudFront rejects `Content-Security-Policy` set via a custom
+  header (`customHeadersBehavior`) — that literal name is reserved for
+  `securityHeadersBehavior.contentSecurityPolicy`, the field it now uses.
+  Confirmed against AWS's own CloudFormation example. The stack rolled
+  back cleanly (`UPDATE_ROLLBACK_COMPLETE`) with zero impact before the
+  fix landed.
 - Redeploying: `cd infra && cdk deploy` — the backend jar rebuilds
   automatically first (`cdk.json`'s app command), but **`npm run build` in
   `web/` is still manual** and CDK uploads whatever `web/dist` holds.
-- ⚠️ **The whole security review is committed but has never been
-  deployed** — every phase below exists only in the repo.
 - PWA client (`web/`): **built and deployed**, see
   [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA on
   S3 + CloudFront (OAC-fronted); login (Cognito SRP), signup, vault CRUD,
   password generator, offline unlock, change-Master-Password, and
-  inactivity auto-lock all exist. No MFA — deliberately not built, see
+  inactivity auto-lock all exist. No MFA — deliberately, permanently not
+  built (decided 2026-08-25, not deferred): the Master Password is the
+  real second factor, and a lost/stolen phone doesn't have it either — see
   architecture.md §5. `npm test` (**97 tests**, incl. Argon2id
   cross-checked against `@noble/hashes` + an RFC 9106 vector) and
   `npm run build` verified clean. Much of the UI has only ever been
   verified by unit test + build, **not by a real browser run-through** —
   see [docs/todo.md](docs/todo.md) for the per-feature list of what's
   still manually unverified.
-- Security review Phases 2–3 (2026-08-24, **not deployed**): CloudFront
-  security headers + strict CSP, a `javascript:` URL XSS fix (`45ccec5`),
-  `.github/dependabot.yml`, Cognito Plus/threat protection,
+- Security review Phases 0–3 (Cognito Plus/threat protection,
   `preventUserExistenceErrors`, 7-day refresh tokens, in-Lambda `iss`/`aud`
   JWT validation, least-privilege Lambda IAM, localhost dropped from prod
   CORS, a Lambda-invocation-spike alarm → SNS email, and a Budgets Action
-  cost kill switch on a CDK-owned `smallstash-app` budget (auto-attaches an
-  S3/DynamoDB Deny to the **Lambda execution role** — root and
-  `smallstash-deployer` stay untouched; recovery is detaching the policy,
-  no redeploy).
-- The CSP was **flipped to enforcing in code (2026-08-25)**, after
-  `web/e2e/login-authenticated.spec.js` passed with zero violations on an
-  authenticated page — but **not deployed yet**, so the live site still
-  sends the old `Content-Security-Policy-Report-Only` header until the
-  next `cdk deploy`. The SNS alert email needs its **AWS confirmation link
-  clicked** or the alarm notifies nobody (already done as of 2026-08-25).
+  cost kill switch on a CDK-owned `smallstash-app` budget) are **all
+  deployed and live** as of 2026-08-25. The SNS alert email's confirmation
+  link has been clicked, so the alarm/kill switch actually notify.
+- ⚠️ **`web/e2e/offline-unlock.spec.js` still carries a `test.fail()`
+  annotation from before the offline-boot fix was deployed** - now that
+  the fix is live, this needs re-running against the live URL; if it
+  passes for real, remove the annotation. Not yet done as of this note -
+  first thing worth doing next session. Same idea for
+  `security-headers.spec.js`'s CSP-enforcing check and
+  `change-login-password.spec.js`'s friendly-message check - both should
+  now pass live where they didn't before deploy; worth a full
+  `npx playwright test` run to confirm all 16 are genuinely green, not
+  just assumed from this session's individual checks.
 - Not yet built anywhere: CI (no workflow runs `mvn test` / `npm test`),
   Svelte component tests, browser/E2E tests (deliberately deferred until
   the security phases land — see [docs/todo.md](docs/todo.md)).
