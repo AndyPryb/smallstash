@@ -87,6 +87,35 @@ export default defineConfig(({ mode }) => {
           // here; a stale 200 for /keys would be a correctness bug, not a perf win.
           globPatterns: ['**/*.{js,css,html,svg,woff2}'],
           navigateFallback: 'index.html',
+          // config.json is deliberately NOT in globPatterns above - it's
+          // .json, generated fresh per deploy (infra/'s ConfigDeployment),
+          // not a static build asset with a content-hashed filename the
+          // precache manifest can pin. Without this runtime rule the app
+          // was completely unable to boot offline: config.js's
+          // fetch('/config.json') always went straight to the network, so
+          // going offline and reloading failed before ever reaching the
+          // offline-unlock code path it exists for - confirmed live via
+          // web/e2e/offline-unlock.spec.js (2026-08-25), which is what
+          // caught this.
+          //
+          // NetworkFirst, not CacheFirst: online, always prefer the current
+          // config over a stale cached one (this is what changes on every
+          // full stack recreate - a stale pool/client ID here would be
+          // actively wrong, not just outdated). Offline, or if the network
+          // takes longer than networkTimeoutSeconds, fall back to whatever
+          // was cached from the last successful online load. maxEntries: 1
+          // because there is only ever one config.json worth caching.
+          runtimeCaching: [
+            {
+              urlPattern: ({ url }) => url.pathname === '/config.json',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'smallstash-config',
+                networkTimeoutSeconds: 3,
+                expiration: { maxEntries: 1 },
+              },
+            },
+          ],
         },
         devOptions: { enabled: false },
       }),

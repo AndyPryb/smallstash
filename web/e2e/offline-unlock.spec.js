@@ -8,31 +8,27 @@ import { testUserEmail, testUserPassword, testUserMasterPassword } from './env.j
  * as the motivating case for offline testing).
  */
 test.describe('Offline unlock', () => {
-  // CONFIRMED BUG (2026-08-25), not test flakiness - test.fail() marks this
-  // as expected-to-fail so the suite stays meaningfully green/red: if this
-  // ever starts passing, Playwright reports THAT as a failure (a nudge to
-  // remove this annotation once the real bug is fixed), rather than the
-  // fix going unnoticed.
+  // CONFIRMED BUG (2026-08-25) - see docs/todo.md "PWA: offline access to
+  // key material". Root cause: the PWA's service worker precache glob is
+  // `['**/*.{js,css,html,svg,woff2}']` - .json is never included, and there
+  // was no `runtimeCaching` rule for `/config.json` either, so it always
+  // hit the network with zero offline fallback and the app couldn't finish
+  // booting offline at all.
   //
-  // Root cause confirmed by reading vite.config.js, not guessed from the
-  // symptom: the PWA's service worker precache glob is
-  // `['**/*.{js,css,html,svg,woff2}']` - .json is never included, and
-  // there's no `runtimeCaching` rule for `/config.json` either. So
-  // config.js's `fetch('/config.json')` always goes to the network, with
-  // zero offline fallback. Confirmed live: going offline and reloading
-  // shows "Small Stash failed to load its configuration" - the app can't
-  // finish booting offline, so it never even reaches the offline-unlock
-  // code path this test is trying to exercise. docs/todo.md's "PWA:
-  // offline access to key material" marks the *feature* as resolved
-  // 2026-08-23 - that was true of the unlock logic itself
-  // (session.js/cache/db.js), verified only by unit test at the time; this
-  // is the first real-browser exercise of the full flow, and it doesn't
-  // survive contact with an actual offline browser.
+  // FIX IMPLEMENTED (2026-08-25, vite.config.js - a NetworkFirst
+  // runtimeCaching rule for /config.json) and verified working at the
+  // mechanism level via a standalone script against `npm run preview`:
+  // offline fetch('/config.json') now returns 200 from cache, and the
+  // "failed to load its configuration" error no longer appears.
   //
-  // Fix (not yet implemented, needs a decision - see docs/todo.md): add a
-  // `runtimeCaching` entry for `/config.json` with a NetworkFirst
-  // strategy, so a successful online load caches a fallback the SW can
-  // serve when the network fails.
+  // test.fail() STAYS for now, deliberately: this suite's default target
+  // is the live deployed site, which doesn't have this fix until the next
+  // `cdk deploy`/frontend redeploy. This exact spec could not be used to
+  // confirm the fix end-to-end locally either - CORS blocks
+  // localhost:4173 from reaching the real API (only the CloudFront origin
+  // is allowed), so a local run fails earlier, on the online step, for an
+  // unrelated reason. Remove test.fail() only after this passes for real
+  // against the live URL post-deploy.
   test.fail();
   test('a device with a prior online sign-in can unlock while offline', async ({ page, context }) => {
     // Online sign-in first - this is what populates the IndexedDB cache
