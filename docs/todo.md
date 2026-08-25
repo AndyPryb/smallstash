@@ -551,11 +551,28 @@ re-researched later:
 
 ### Phase 1 - implemented 2026-08-24, not deployed
 
-- [x] **Lambda `reservedConcurrentExecutions(5)`** - hard ceiling on
-      concurrent execution, the cost control the API Gateway throttle
-      can't be (throttling caps requests/second; concurrency caps how many
-      run at once, which is what actually bounds GB-seconds if something
-      gets past the throttle).
+- [x] **Lambda `reservedConcurrentExecutions(5)` - implemented, then
+      reverted 2026-08-24 on the first real deploy attempt.** Intended as a
+      hard ceiling on concurrent execution (the cost control the API
+      Gateway throttle can't be - throttling caps requests/second,
+      concurrency caps how many run at once). **`cdk deploy` failed
+      `CREATE_FAILED`**: this account's total Lambda concurrency limit in
+      `eu-west-1` is **10**, not AWS's default 1000 (confirmed via
+      `aws lambda get-account-settings`), and AWS enforces a hard floor of
+      >=10 `UnreservedConcurrentExecutions` for the rest of the account at
+      all times - with a total of 10 there's no room to reserve *any*
+      amount. Stack rolled back cleanly (`ROLLBACK_COMPLETE`, fresh create
+      so nothing partial was left behind).
+      **Reverted rather than worked around** - the account-wide ceiling of
+      10 is itself already a real (if coarser) concurrency cap while this
+      is the only Lambda in the account, so removing the per-function
+      reservation isn't a bare regression; the invite gate, throttle, and
+      per-write size cap are unaffected.
+      **To restore**: request a Lambda concurrent-execution Service Quota
+      increase (e.g. to 100 - typically auto-approved within minutes for
+      an increase this size), then reinstate
+      `.reservedConcurrentExecutions(5)` in `SmallstashStack.java` (marked
+      there with an inline comment explaining all of this).
 - [x] **Conditional write on `PUT /keys`.** `saveKeys` now writes with
       `attribute_not_exists(pk) OR #kv < :newKeyVersion`, so a stale or
       replayed write can't clobber newer key material. A rejected write
@@ -1245,16 +1262,31 @@ one place allowed to hold the live Vault Key) had zero coverage.
 Verified: all 79 tests pass (`npm test`), `npm run build` clean and
 unaffected by the new devDependencies.
 
-## Browser/E2E testing with Playwright - deferred until all security phases land (2026-08-24)
+## Browser/E2E testing with Playwright - harness installed, specs not written (2026-08-24)
 
 **Decision:** all browser-level verification is being collected into one
 piece of work that runs *after* the security-fix phases are complete,
 rather than a manual click-through after each phase. Playwright is the
-chosen vehicle. Deliberately not started yet.
+chosen vehicle.
 
-Cheap to set up when the time comes: a Playwright browser cache already
-exists on this machine (`~/AppData/Local/ms-playwright`), and Chrome and
-Edge are both installed, so `channel: 'chrome'` needs no download.
+- [x] **Harness installed (2026-08-24)**, while the first real deploy was
+      running in parallel. `@playwright/test` added as a `web/`
+      devDependency; `web/playwright.config.js` (bundled Chromium project,
+      `PLAYWRIGHT_BASE_URL` left unset by design - see below);
+      `web/e2e/README.md` carries this same priority list so it's visible
+      from the test directory, not just here; `npm run test:e2e` script
+      added; `test-results/`/`playwright-report/`/`blob-report/` gitignored.
+      **No specs exist yet** - `npx playwright test --list` correctly
+      reports zero tests; writing them is the still-deferred part.
+      Verified end-to-end: a real `chromium.launch()` + page load succeeded
+      using the **existing local browser cache with zero download** (the
+      cached version, `chromium-1234`, happened to match what
+      `@playwright/test` 1.62.1 requires). The config deliberately does
+      **not** rely on that being true generally - it uses Playwright's own
+      bundled Chromium project rather than `channel: 'chrome'`, so a
+      fresh machine or CI runner would just need one `npx playwright
+      install chromium`, not a specific local Chrome/Edge install. `npm
+      test` re-verified unaffected (still 97/97).
 
 What this work has to cover, in rough priority order:
 

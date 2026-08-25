@@ -2,3 +2,9 @@ node_modules/
 dist/
 dev-dist/
 .vite/
+
+# Playwright run artifacts - traces/reports/screenshots from local or CI
+# runs, not source
+test-results/
+playwright-report/
+blob-report/

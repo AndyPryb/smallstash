@@ -321,15 +321,35 @@ public class SmallstashStack extends Stack {
                 .code(Code.fromAsset("../target/smallstash-0.1.jar"))
                 .memorySize(512)
                 .timeout(Duration.seconds(30))
-                // Hard ceiling on how much Lambda this stack can ever run at
-                // once - the cost control the API Gateway throttle can't be.
-                // Throttling caps requests/second; concurrency caps how many
-                // run simultaneously, which is what actually bounds GB-seconds
-                // if something (a retry storm, a bug, an abusive client) gets
-                // past the throttle. 5 is far above real demand for ~20 users
-                // making a handful of requests a day, and low enough that a
-                // runaway can't cost meaningful money before the alarm fires.
-                .reservedConcurrentExecutions(5)
+                // !! NO reservedConcurrentExecutions - re-add once the
+                // account's Lambda concurrency quota is raised !!
+                // Per-function reserved concurrency was tried here (5) and
+                // reverted: it failed CREATE_FAILED at deploy time because
+                // this account's total Lambda concurrency limit in
+                // eu-west-1 is only 10 (confirmed via
+                // `aws lambda get-account-settings` - AWS's own default is
+                // 1000, this account just hasn't had it raised). AWS
+                // enforces a hard floor of >=10 UnreservedConcurrentExecutions
+                // for the rest of the account at all times, so with a total
+                // of 10 there is no room to reserve any amount without going
+                // negative on that floor - not something a code change can
+                // route around.
+                //
+                // Not a bare regression: the account-wide ceiling of 10 is
+                // itself a real, if coarser, concurrency cap - a runaway
+                // can't exceed 10 concurrent Lambda executions account-wide
+                // no matter what, since this is currently the only Lambda in
+                // the account. The per-function reservation was additional
+                // insurance on top of that, not the only thing standing
+                // between a bug/abusive client and a cost blowout - see the
+                // invite gate, throttle, and per-write size cap, all still
+                // in place.
+                //
+                // To restore per-function reservation: request a Lambda
+                // concurrent-execution Service Quota increase (e.g. to 100 -
+                // usually auto-approved within minutes for an increase this
+                // size), then reinstate `.reservedConcurrentExecutions(5)`
+                // here. Tracked in docs/todo.md.
                 // Without this, the log group CDK implicitly creates never
                 // expires - logs accumulate (and stay billable) forever. One
                 // month is plenty for debugging a personal app.

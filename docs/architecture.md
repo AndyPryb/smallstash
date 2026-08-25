@@ -181,9 +181,10 @@ limit; the rule bounds long-term accumulation from normal use, not a burst.
 
 What actually bounds a burst is the layered set, not this rule alone:
 invite-gated signup (an attacker needs an account at all), the stage
-throttle (10 rps), `reservedConcurrentExecutions(5)`, and the 512 KiB
-per-write cap. Tightening the retention window is cheap if that ever feels
-too loose — see [todo.md](todo.md).
+throttle (10 rps), the account-wide Lambda concurrency ceiling (see §6 —
+currently 10, not per-function reserved concurrency, see the note there),
+and the 512 KiB per-write cap. Tightening the retention window is cheap if
+that ever feels too loose — see [todo.md](todo.md).
 
 Version rollback is an **operator-only** path: `GET /vault` never passes a
 `versionId`, so the API always returns the current version and no client can
@@ -410,8 +411,19 @@ account into someone else's compute budget:
 |---|---|---|
 | Invite-gated signup | PreSignUp Lambda trigger | who can get an account at all — the root cause |
 | 512 KiB per `PUT /vault` + S3 lifecycle rule | `VaultController`, `SmallstashStack` | storage growth per user (~2 MB worst case) |
-| `reservedConcurrentExecutions(5)` | Lambda | GB-seconds under a flood — throttling caps requests/sec, concurrency caps how many run *at once* |
+| Account-wide Lambda concurrency ceiling | AWS account setting, not CDK | GB-seconds under a flood — currently **10** total (see caveat below), not a per-function reservation |
 | Stage throttle (10 rps / 20 burst) | HTTP API stage | request rate |
+
+⚠️ **Per-function `reservedConcurrentExecutions` was attempted and
+reverted (2026-08-24)** — the first real deploy failed `CREATE_FAILED`
+because this account's total Lambda concurrency limit in `eu-west-1` is
+**10**, not AWS's default of 1000, and AWS enforces a floor of ≥10
+unreserved executions for the rest of the account at all times — leaving
+no room to reserve any amount out of a pool that small. What's left is the
+coarser account-wide ceiling above, which still bounds a flood while this
+is the only Lambda in the account; see [todo.md](todo.md) for how to
+restore per-function reservation (a Service Quota increase, then
+re-adding the CDK property — marked inline in `SmallstashStack.java`).
 
 Any personal AWS Budgets on the account are **notification-only and
 evaluate roughly 3x/day** — a smoke alarm, not a circuit breaker. Two
@@ -612,9 +624,10 @@ as code, every AWS resource this project needs:
   with `MICRONAUT_SECURITY_ENABLED`, `COGNITO_JWKS_URL`,
   `MICRONAUT_ENVIRONMENTS=lambda`, and the bucket/table names all wired
   automatically from the resources the same stack creates — not a
-  manually-remembered post-deploy step. Plus
-  `reservedConcurrentExecutions(5)` and a 30-day-retention log group —
-  *both pending deploy*. Its IAM is least-privilege as of Phase 3
+  manually-remembered post-deploy step. Plus a 30-day-retention log group
+  — *pending deploy*. **No per-function reserved concurrency** — tried and
+  reverted on the first deploy attempt, see §6's caveat. Its IAM is
+  least-privilege as of Phase 3
   (`s3:GetObject`/`PutObject` scoped to `users/*`, `dynamodb:GetItem`/
   `PutItem`, nothing else — notably no delete of any kind) — *pending
   deploy*.
