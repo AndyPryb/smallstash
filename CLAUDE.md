@@ -111,13 +111,23 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   verified by unit test + build, **not by a real browser run-through** —
   see [docs/todo.md](docs/todo.md) for the per-feature list of what's
   still manually unverified.
-- Security review Phase 2 (2026-08-24, **not deployed**): CloudFront
-  security headers + a strict CSP — but the CSP ships as
-  **`Content-Security-Policy-Report-Only`**, so until it's flipped to
-  enforcing it logs violations and blocks nothing. Also a `javascript:`
-  URL XSS fix (`45ccec5`) and `.github/dependabot.yml`.
+- Security review Phases 2–3 (2026-08-24, **not deployed**): CloudFront
+  security headers + strict CSP, a `javascript:` URL XSS fix (`45ccec5`),
+  `.github/dependabot.yml`, Cognito Plus/threat protection,
+  `preventUserExistenceErrors`, 7-day refresh tokens, in-Lambda `iss`/`aud`
+  JWT validation, least-privilege Lambda IAM, localhost dropped from prod
+  CORS, and a Lambda-invocation-spike alarm → SNS email.
+- ⚠️ **Two things look done but aren't, and both fail quietly:** the CSP
+  ships as **`Content-Security-Policy-Report-Only`** (logs violations,
+  blocks nothing) until the header is renamed; and the SNS alert email
+  needs its **AWS confirmation link clicked** or the alarm notifies nobody.
+- 🚫 **Do not set `Mfa.REQUIRED`.** It looks like a one-line flip and is
+  not: `web/` has no TOTP *enrolment* flow, so Cognito's `MFA_SETUP`
+  challenge would hang `signIn` and lock out every user. See
+  [docs/todo.md](docs/todo.md).
 - Not yet built anywhere: CI (no workflow runs `mvn test` / `npm test`),
-  Svelte component tests.
+  Svelte component tests, browser/E2E tests (deliberately deferred until
+  the security phases land — see [docs/todo.md](docs/todo.md)).
 
 ## Where to look for what
 

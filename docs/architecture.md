@@ -254,13 +254,17 @@ becomes an observed problem.
 
   Two independent layers verify the token before that point: API
   Gateway's native Cognito JWT authorizer (so a bad token never reaches
-  the Lambda) and `micronaut-security-jwt` in-Lambda. **Caveat on the
-  second layer**: it currently validates the *signature* against the
-  pool's JWKS plus standard time claims, but not `iss`, `aud`, or
-  `token_use` — so it accepts any token signed by that pool. Low impact
-  today with one pool and one app client; it would silently fail to
-  constrain a second app client added later. Tightening it is tracked in
-  [todo.md](todo.md).
+  the Lambda) and `micronaut-security-jwt` in-Lambda. The second layer
+  used to check only the *signature*, meaning it would accept any token
+  the pool had ever signed; it now also validates `iss` and `aud`
+  (`claims-validators.issuer`/`.audience`, fed from the stack's own
+  `COGNITO_ISSUER`/`COGNITO_CLIENT_ID` env vars).
+  Requiring an audience does more than it looks like: Cognito **access**
+  tokens carry no `aud` claim (they use `client_id`), and Micronaut's
+  `AudienceJwtClaimsValidator` rejects a token whose audience list is
+  empty. So this implicitly enforces "must be an ID token issued to this
+  client" — which is what the PWA sends (`session.js` uses `idToken`) —
+  and covers the `token_use` concern without needing a custom validator.
 
   This is simpler to build and reason about at this project's scale;
   Identity-Pool-scoped IAM is worth adding only if this ever needs to
@@ -283,9 +287,31 @@ becomes an observed problem.
   [todo.md](todo.md)).
 - **Optional TOTP MFA** on the Cognito login step — cheap, adds a layer
   independent of the vault's own crypto. Not required, user's choice at
-  signup. Making it **required** is a decided-but-unimplemented change
-  (see [todo.md](todo.md)'s security review); the UI already exists
-  (`MfaCodeForm.svelte`).
+  signup.
+  Making it **required is blocked, not merely pending** — worth knowing
+  before anyone flips `Mfa.REQUIRED` thinking it's a one-liner.
+  `MfaCodeForm.svelte` only *responds* to a challenge for an
+  already-enrolled device; there is no enrolment flow in `web/` at all (no
+  `associateSoftwareToken`/`verifySoftwareToken`/`setUserMfaPreference`).
+  With TOTP as the only second factor, Cognito answers an un-enrolled
+  user's first sign-in with an `MFA_SETUP` challenge that `signIn` has no
+  callback for — so the flip would lock out every user, including the
+  operator. [todo.md](todo.md) has the enrolment steps needed to unblock it.
+- **Threat protection is on** (Cognito **Plus** tier,
+  `standardThreatProtectionMode: FULL_FUNCTION`): compromised-credential
+  detection checks the *login* password against known-breach corpora, and
+  adaptive auth scores IP reputation and device signals, blocking or
+  forcing step-up on high risk. This is what covers password spraying,
+  which Cognito's own per-user lockout does not. `FULL_FUNCTION` acts
+  rather than just logging; `AUDIT` is the log-only fallback if it ever
+  proves too aggressive.
+- **`preventUserExistenceErrors` is enabled**, so an unauthenticated
+  `InitiateAuth` for an unknown address no longer returns
+  `UserNotFoundException`. Before this it did — confirmed live — letting
+  anyone test whether a given email had an account here.
+- **Refresh tokens last 7 days**, not Cognito's 30-day default; that window
+  is how long a stolen refresh token stays usable, and any use inside it
+  slides it forward.
 - **Brute-force protection is Cognito's, and it is not configurable.**
   After 5 failed password attempts Cognito locks the user for `2^(n-5)`
   seconds, escalating to a ~15 minute cap, resetting on a successful
@@ -389,16 +415,17 @@ account into someone else's compute budget:
 
 Note the account's two AWS Budgets ($15 monthly, $1 zero-spend) are
 **notification-only and evaluate roughly 3x/day** — they are a smoke alarm,
-not a circuit breaker. A CloudWatch alarm on Lambda invocations (minutes,
-not hours) and a Budgets Action applying a Deny policy to the Lambda's
-**execution role** — not `smallstash-deployer`, which is never in the live
-request path — are both tracked in [todo.md](todo.md), not yet built.
+not a circuit breaker. A **CloudWatch alarm** now covers fast detection
+(Lambda invocations, Sum > 200/hour → SNS email, so minutes rather than
+hours). The remaining gap is automatic *containment*: a Budgets Action
+applying a Deny policy to the Lambda's **execution role** — not
+`smallstash-deployer`, which is never in the live request path — is
+designed but not built, see [todo.md](todo.md).
 
-**Cognito tier caveat:** the $0 line above assumes the current
-**Essentials** tier. The decided-but-unimplemented move to **Plus** (for
-Threat Protection: compromised-credential detection + adaptive auth) is
-**$0.02/MAU with no free tier** — roughly $0.40/month at 20 users. Small,
-but it's the first line item that stops being literally zero.
+**Cognito tier:** the $0 line above no longer holds exactly. The pool is on
+the **Plus** tier for Threat Protection, which is **$0.02/MAU with no free
+tier** — roughly **$0.40/month at 20 users**. Deliberate and approved; it's
+the one line item in this stack that is not literally zero.
 
 **Why on-demand DynamoDB, not provisioned:** provisioned capacity has an
 "Always Free" 25 WCU/25 RCU/25 GB tier that's tempting, but it requires
@@ -547,7 +574,9 @@ as code, every AWS resource this project needs:
 
 - Cognito User Pool — SRP-only client, optional TOTP MFA, strong password
   policy. Self-signup is enabled but **gated by a PreSignUp Lambda trigger
-  checking an invite code** (§5) — *pending deploy*.
+  checking an invite code** (§5) — *pending deploy*. Also *pending deploy*:
+  **Plus tier + threat protection**, `preventUserExistenceErrors`, and a
+  7-day refresh token.
 - DynamoDB `smallstash-users` table (PAY_PER_REQUEST) with **point-in-time
   recovery** — *pending deploy*.
 - S3 vault bucket (versioned, CDK-generated name — not hardcoded, since S3
@@ -560,7 +589,14 @@ as code, every AWS resource this project needs:
   automatically from the resources the same stack creates — not a
   manually-remembered post-deploy step. Plus
   `reservedConcurrentExecutions(5)` and a 30-day-retention log group —
-  *both pending deploy*.
+  *both pending deploy*. Its IAM is least-privilege as of Phase 3
+  (`s3:GetObject`/`PutObject` scoped to `users/*`, `dynamodb:GetItem`/
+  `PutItem`, nothing else — notably no delete of any kind) — *pending
+  deploy*.
+- SNS topic `smallstash-alerts` + a CloudWatch alarm on Lambda invocations
+  (Sum > 200/hour) — *pending deploy*. The email subscription only exists
+  if `SMALLSTASH_ALERT_EMAIL` is set, and **AWS requires clicking a
+  confirmation link before it delivers anything**.
 - HTTP API with a native `HttpUserPoolAuthorizer`, explicit throttling
   (rate 10/s, burst 20 — cheap insurance given real usage is a handful of
   requests every few days; AWS's much higher account-level default stays

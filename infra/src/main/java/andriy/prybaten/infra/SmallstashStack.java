@@ -16,13 +16,20 @@ import software.amazon.awscdk.services.apigatewayv2.HttpApi;
 import software.amazon.awscdk.services.apigatewayv2.HttpMethod;
 import software.amazon.awscdk.services.apigatewayv2.HttpStage;
 import software.amazon.awscdk.services.apigatewayv2.ThrottleSettings;
+import software.amazon.awscdk.services.cloudwatch.Alarm;
+import software.amazon.awscdk.services.cloudwatch.ComparisonOperator;
+import software.amazon.awscdk.services.cloudwatch.MetricOptions;
+import software.amazon.awscdk.services.cloudwatch.TreatMissingData;
+import software.amazon.awscdk.services.cloudwatch.actions.SnsAction;
 import software.amazon.awscdk.services.cognito.AccountRecovery;
 import software.amazon.awscdk.services.cognito.AuthFlow;
 import software.amazon.awscdk.services.cognito.AutoVerifiedAttrs;
+import software.amazon.awscdk.services.cognito.FeaturePlan;
 import software.amazon.awscdk.services.cognito.Mfa;
 import software.amazon.awscdk.services.cognito.MfaSecondFactor;
 import software.amazon.awscdk.services.cognito.PasswordPolicy;
 import software.amazon.awscdk.services.cognito.SignInAliases;
+import software.amazon.awscdk.services.cognito.StandardThreatProtectionMode;
 import software.amazon.awscdk.services.cognito.UserPool;
 import software.amazon.awscdk.services.cognito.UserPoolClient;
 import software.amazon.awscdk.services.cognito.UserPoolClientOptions;
@@ -50,9 +57,12 @@ import software.amazon.awscdk.services.dynamodb.PointInTimeRecoverySpecification
 import software.amazon.awscdk.services.dynamodb.Table;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
+import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.lambda.Runtime;
 import software.amazon.awscdk.services.logs.LogGroup;
 import software.amazon.awscdk.services.logs.RetentionDays;
+import software.amazon.awscdk.services.sns.Topic;
+import software.amazon.awscdk.services.sns.subscriptions.EmailSubscription;
 import software.amazon.awscdk.services.s3.BlockPublicAccess;
 import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.BucketEncryption;
@@ -227,8 +237,28 @@ public class SmallstashStack extends Stack {
                 .signInAliases(SignInAliases.builder().email(true).build())
                 .autoVerify(AutoVerifiedAttrs.builder().email(true).build())
                 .accountRecovery(AccountRecovery.EMAIL_ONLY)
+                // !! STAYS OPTIONAL UNTIL THE CLIENT CAN ENROL A TOTP DEVICE !!
+                // Mfa.REQUIRED is the intended end state and is deliberately
+                // NOT set yet: with TOTP as the only second factor, Cognito
+                // answers the first sign-in of an un-enrolled user with an
+                // MFA_SETUP challenge, and web/'s cognito.js has no
+                // associateSoftwareToken/verifySoftwareToken flow to answer it
+                // (MfaCodeForm only *responds* to a challenge for an
+                // already-enrolled device). Flipping this without building
+                // enrolment first locks every user out, including you. See
+                // docs/todo.md.
                 .mfa(Mfa.OPTIONAL)
                 .mfaSecondFactor(MfaSecondFactor.builder().otp(true).sms(false).build())
+                // Plus tier = threat protection: compromised-credential
+                // detection (the login password checked against known-breach
+                // corpora) and risk-based adaptive auth scoring IP reputation
+                // and device signals. $0.02/MAU, no free tier - about
+                // $0.40/month at 20 users, the one deliberately non-zero line
+                // item in this stack. Cognito's own failed-login lockout is
+                // free but not configurable and is per-user, not per-IP; this
+                // is what covers password-spraying and credential stuffing.
+                .featurePlan(FeaturePlan.PLUS)
+                .standardThreatProtectionMode(StandardThreatProtectionMode.FULL_FUNCTION)
                 .passwordPolicy(PasswordPolicy.builder()
                         .minLength(12)
                         .requireLowercase(true)
@@ -258,6 +288,18 @@ public class SmallstashStack extends Stack {
                         .userSrp(true)
                         .build())
                 .generateSecret(false)
+                // Without this, Cognito answers an unauthenticated
+                // InitiateAuth for an unknown email with UserNotFoundException
+                // - confirmed live against the deployed pool, so anyone on the
+                // internet could test whether a given address has an account
+                // here. With it, existence-revealing responses are replaced by
+                // a generic failure.
+                .preventUserExistenceErrors(true)
+                // 30 days (the Cognito default) is generous for a secrets
+                // manager - it's how long a stolen refresh token stays usable.
+                // 7 still means a normal user rarely re-authenticates, since
+                // any use inside the window slides it forward.
+                .refreshTokenValidity(Duration.days(7))
                 .build());
 
         // ---------------------------------------------------------------
@@ -295,11 +337,34 @@ public class SmallstashStack extends Stack {
                         "SMALLSTASH_USERS_TABLE", usersTable.getTableName(),
                         "MICRONAUT_ENVIRONMENTS", "lambda",
                         "MICRONAUT_SECURITY_ENABLED", "true",
-                        "COGNITO_JWKS_URL", userPool.getUserPoolProviderUrl() + "/.well-known/jwks.json"))
+                        "COGNITO_JWKS_URL", userPool.getUserPoolProviderUrl() + "/.well-known/jwks.json",
+                        // Feed the in-Lambda JWT claim validators (see
+                        // application-lambda.properties). Previously the
+                        // Lambda checked only the signature, so it would have
+                        // accepted any token this pool ever signed.
+                        "COGNITO_ISSUER", userPool.getUserPoolProviderUrl(),
+                        "COGNITO_CLIENT_ID", userPoolClient.getUserPoolClientId()))
                 .build();
 
-        vaultBucket.grantReadWrite(backend);
-        usersTable.grantReadWriteData(backend);
+        // Least privilege, replacing grantReadWrite/grantReadWriteData. Those
+        // are convenient but hand out considerably more than this app uses -
+        // notably s3:DeleteObject* (which on a versioned bucket includes
+        // DeleteObjectVersion, i.e. the ability to destroy the version history
+        // that is the vault's only rollback path) and dynamodb:DeleteItem
+        // (which could drop the wrapped Vault Key). The app never deletes
+        // anything: S3VaultRepository does GetObject/PutObject and
+        // DynamoDbUserKeysRepository does GetItem/PutItem, full stop.
+        //
+        // Object access is additionally scoped to the users/ prefix - the only
+        // place vault blobs live.
+        backend.addToRolePolicy(PolicyStatement.Builder.create()
+                .actions(List.of("s3:GetObject", "s3:PutObject"))
+                .resources(List.of(vaultBucket.getBucketArn() + "/users/*"))
+                .build());
+        backend.addToRolePolicy(PolicyStatement.Builder.create()
+                .actions(List.of("dynamodb:GetItem", "dynamodb:PutItem"))
+                .resources(List.of(usersTable.getTableArn()))
+                .build());
 
         // ---------------------------------------------------------------
         // PWA hosting (web/dist -> S3, fronted by CloudFront)
@@ -472,6 +537,19 @@ public class SmallstashStack extends Stack {
         // too (defense in depth, see application-lambda.properties).
         // ---------------------------------------------------------------
 
+        // localhost is only in the allowlist when explicitly asked for
+        // (`-c allowLocalhostCors=true`, or SMALLSTASH_ALLOW_LOCALHOST_CORS in
+        // .env). It used to be unconditional, which meant the production API
+        // permanently advertised a development origin. CORS isn't much of a
+        // security boundary for a bearer-token API - it uses no cookies, so a
+        // malicious origin can't ride an ambient session - but there's no
+        // reason for the deployed API to keep answering preflights for an
+        // origin only a developer's machine can serve.
+        String allowLocalhost = optionalSetting("allowLocalhostCors", "SMALLSTASH_ALLOW_LOCALHOST_CORS");
+        List<String> allowedOrigins = "true".equalsIgnoreCase(allowLocalhost)
+                ? List.of("http://localhost:5173", "https://" + distribution.getDistributionDomainName())
+                : List.of("https://" + distribution.getDistributionDomainName());
+
         HttpUserPoolAuthorizer authorizer = new HttpUserPoolAuthorizer("CognitoAuthorizer", userPool,
                 HttpUserPoolAuthorizerProps.builder()
                         .userPoolClients(List.of(userPoolClient))
@@ -489,9 +567,7 @@ public class SmallstashStack extends Stack {
                 // time within this same stack, so no manual step is needed
                 // once a real custom domain replaces it (see docs/todo.md).
                 .corsPreflight(CorsPreflightOptions.builder()
-                        .allowOrigins(List.of(
-                                "http://localhost:5173",
-                                "https://" + distribution.getDistributionDomainName()))
+                        .allowOrigins(allowedOrigins)
                         .allowMethods(List.of(CorsHttpMethod.GET, CorsHttpMethod.PUT, CorsHttpMethod.OPTIONS))
                         .allowHeaders(List.of("Authorization", "Content-Type"))
                         .build())
@@ -589,6 +665,50 @@ public class SmallstashStack extends Stack {
                 .build();
 
         // ---------------------------------------------------------------
+        // Cost/abuse alarm (security review Phase 3)
+        //
+        // The account already has two AWS Budgets ($15 monthly, $1
+        // zero-spend), but Budgets are notification-only and evaluate only a
+        // few times a day - a smoke alarm, not a circuit breaker. A runaway
+        // could burn most of a day before they fire. This alarm reacts in
+        // minutes on the metric that actually leads the spend.
+        // ---------------------------------------------------------------
+
+        String alertEmail = optionalSetting("alertEmail", "SMALLSTASH_ALERT_EMAIL");
+
+        Topic alertTopic = Topic.Builder.create(this, "AlertTopic")
+                .topicName("smallstash-alerts")
+                .displayName("smallStash alerts")
+                .build();
+
+        if (alertEmail != null) {
+            // AWS emails a confirmation link on first deploy; the subscription
+            // stays "Pending confirmation" - and silently delivers nothing -
+            // until it's clicked.
+            alertTopic.addSubscription(new EmailSubscription(alertEmail));
+        }
+
+        // Real usage is a handful of requests every few days, so ~200
+        // invocations in an hour already means something is wrong. Set well
+        // below the API stage's own ceiling (10 rps would be 36,000/hour) so
+        // this fires long before the throttle alone would bound the damage.
+        Alarm.Builder.create(this, "BackendInvocationSpikeAlarm")
+                .alarmName("smallstash-backend-invocation-spike")
+                .alarmDescription("Backend Lambda invocations far above normal - possible abuse or runaway retry loop")
+                .metric(backend.metricInvocations(MetricOptions.builder()
+                        .period(Duration.hours(1))
+                        .statistic("Sum")
+                        .build()))
+                .threshold(200)
+                .evaluationPeriods(1)
+                .comparisonOperator(ComparisonOperator.GREATER_THAN_THRESHOLD)
+                // Absent data is the normal state for a mostly-idle app;
+                // treating it as breaching would page constantly.
+                .treatMissingData(TreatMissingData.NOT_BREACHING)
+                .build()
+                .addAlarmAction(new SnsAction(alertTopic));
+
+        // ---------------------------------------------------------------
         // Outputs
         // ---------------------------------------------------------------
 
@@ -619,49 +739,72 @@ public class SmallstashStack extends Stack {
      *     endpoint that is either ungated or gated by a guessable default.
      */
     private String resolveInviteCode() {
-        Object fromContext = this.getNode().tryGetContext("inviteCode");
-        if (fromContext != null && !fromContext.toString().isBlank()) {
-            return fromContext.toString();
+        String inviteCode = optionalSetting("inviteCode", "SMALLSTASH_INVITE_CODE");
+        if (inviteCode != null) {
+            return inviteCode;
         }
-
-        String fromEnv = System.getenv("SMALLSTASH_INVITE_CODE");
-        if (fromEnv != null && !fromEnv.isBlank()) {
-            return fromEnv;
-        }
-
-        // infra/ is the working directory for cdk commands, so the repo-root
-        // .env is one level up.
-        Path dotEnv = Path.of("..", ".env");
-        if (Files.isReadable(dotEnv)) {
-            try {
-                for (String line : Files.readAllLines(dotEnv)) {
-                    String trimmed = line.trim();
-                    if (trimmed.startsWith("#") || !trimmed.startsWith("SMALLSTASH_INVITE_CODE=")) {
-                        continue;
-                    }
-                    String value = trimmed.substring("SMALLSTASH_INVITE_CODE=".length()).trim();
-                    // Tolerate the quoted form (SMALLSTASH_INVITE_CODE="abc")
-                    // that .env files commonly use.
-                    if (value.length() >= 2
-                            && (value.startsWith("\"") && value.endsWith("\"")
-                                || value.startsWith("'") && value.endsWith("'"))) {
-                        value = value.substring(1, value.length() - 1);
-                    }
-                    if (!value.isBlank()) {
-                        return value;
-                    }
-                }
-            } catch (IOException e) {
-                throw new IllegalStateException("Could not read " + dotEnv.toAbsolutePath()
-                        + " while looking for SMALLSTASH_INVITE_CODE", e);
-            }
-        }
-
         throw new IllegalStateException("""
                 No invite code configured. Signup is gated by one, so this stack refuses \
                 to synth rather than deploy an ungated (or default-coded) signup endpoint. \
                 Set SMALLSTASH_INVITE_CODE in the repo-root .env (gitignored - see \
                 .env.example), or pass it as CDK context: cdk deploy -c inviteCode=<value>. \
                 See docs/todo.md's security review (finding H-1).""");
+    }
+
+    /**
+     * Looks up a deploy-time setting, in precedence order: CDK context, then
+     * the environment, then the gitignored repo-root {@code .env}.
+     *
+     * @return the value, or {@code null} if it isn't configured anywhere
+     */
+    private String optionalSetting(String contextKey, String envKey) {
+        Object fromContext = this.getNode().tryGetContext(contextKey);
+        if (fromContext != null && !fromContext.toString().isBlank()) {
+            return fromContext.toString();
+        }
+
+        String fromEnv = System.getenv(envKey);
+        if (fromEnv != null && !fromEnv.isBlank()) {
+            return fromEnv;
+        }
+
+        return readDotEnv(envKey);
+    }
+
+    /**
+     * Minimal {@code .env} reader - CDK doesn't read {@code .env} itself, and
+     * pulling in a dotenv library for two keys isn't worth the dependency.
+     * {@code infra/} is the working directory for cdk commands, so the
+     * repo-root file is one level up.
+     */
+    private static String readDotEnv(String key) {
+        Path dotEnv = Path.of("..", ".env");
+        if (!Files.isReadable(dotEnv)) {
+            return null;
+        }
+        String prefix = key + "=";
+        try {
+            for (String line : Files.readAllLines(dotEnv)) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("#") || !trimmed.startsWith(prefix)) {
+                    continue;
+                }
+                String value = trimmed.substring(prefix.length()).trim();
+                // Tolerate the quoted form (KEY="abc") that .env files
+                // commonly use.
+                if (value.length() >= 2
+                        && (value.startsWith("\"") && value.endsWith("\"")
+                            || value.startsWith("'") && value.endsWith("'"))) {
+                    value = value.substring(1, value.length() - 1);
+                }
+                if (!value.isBlank()) {
+                    return value;
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "Could not read " + dotEnv.toAbsolutePath() + " while looking for " + key, e);
+        }
+        return null;
     }
 }

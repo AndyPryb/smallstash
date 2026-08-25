@@ -386,32 +386,57 @@ to implement together as one pass:
       (`securityHeadersBehavior.contentSecurityPolicy` only emits the
       enforcing variant, hence the custom header). **Until it's flipped it
       is documentation, not protection** - the browser logs what it would
-      have blocked and blocks nothing.
-      **There is no reporting endpoint configured**, so violations appear
-      *only* in the browser devtools console - they are not collected
-      anywhere. The manual pass therefore has to be done with devtools
-      open: login, signup (incl. the invite code), vault CRUD, password
-      generator, MFA, offline unlock, and change-Master-Password. Zero
-      violations across all of those, then rename the header to
-      `Content-Security-Policy` in `SmallstashStack.java` (marked there
-      with a `!! FLIP TO ENFORCING !!` comment) and redeploy.
-      Adding a `report-to`/`report-uri` endpoint is a possible alternative
-      to the manual pass, but it needs somewhere to receive the reports -
-      disproportionate here versus just watching the console once.
-- [ ] **Mandatory MFA** (`Mfa.REQUIRED`) - UI (`MfaCodeForm.svelte`)
-      already exists.
-- [ ] **`preventUserExistenceErrors: true`** on the user pool client -
-      closes the confirmed-live user-enumeration gap (unauthenticated
+      have blocked and blocks nothing. The flip itself is one string in
+      `SmallstashStack.java` (marked with a `!! FLIP TO ENFORCING !!`
+      comment) plus a redeploy.
+      **Validating it first is deferred to the browser-testing work below**
+      (decision 2026-08-24) - see "Browser/E2E testing with Playwright".
+      Doing it by hand was considered and deliberately postponed: the whole
+      security-fix sequence lands first, then testing validates all of it in
+      one pass rather than a manual click-through per phase.
+- [ ] 🚫 **Mandatory MFA (`Mfa.REQUIRED`) - BLOCKED, do not just flip it.**
+      Attempted in Phase 3 and deliberately not shipped. The earlier note
+      here ("UI already exists") was wrong and would have caused an
+      outage: `MfaCodeForm.svelte` only *responds* to a challenge for an
+      **already-enrolled** device. There is no enrolment flow anywhere in
+      `web/` - `grep` finds no `associateSoftwareToken`,
+      `verifySoftwareToken`, or `setUserMfaPreference`.
+      With TOTP as the only permitted second factor, Cognito answers the
+      first sign-in of an un-enrolled user with an `MFA_SETUP` challenge.
+      `cognito.js`'s `signIn` has no `mfaSetup` callback, so that promise
+      never resolves. **Every user, including you, would be locked out** -
+      strictly worse than optional MFA.
+      To unblock, build enrolment first:
+      1. `cognitoUser.associateSoftwareToken()` -> returns the shared
+         secret.
+      2. Show it as text plus an `otpauth://` URI (a QR renderer is nicer
+         but is another dependency - decide which).
+      3. `cognitoUser.verifySoftwareToken(code, deviceName)`.
+      4. `cognitoUser.setUserMfaPreference(null, {Enabled: true,
+         PreferredMfa: true})`.
+      5. Handle the `mfaSetup` callback in `signIn` so an un-enrolled user
+         is routed into that flow instead of hanging.
+      Then flip `Mfa.REQUIRED` - and verify it with a real account before
+      trusting it, since a mistake here is a lockout rather than a
+      degraded experience.
+- [x] **`preventUserExistenceErrors: true`** on the user pool client
+      (implemented 2026-08-24, **not deployed**) - closes the
+      confirmed-live user-enumeration gap (unauthenticated
       `InitiateAuth` against a nonexistent email currently returns
       `UserNotFoundException` rather than a generic error).
-- [ ] **Cognito Plus tier (Threat Protection)** - compromised-credential
-      detection (login password checked against known-breach corpora) +
-      risk-based adaptive auth (IP-reputation/device signal scoring on
-      sign-in) + exportable auth event logs. $0.02/MAU, no free tier -
-      confirmed ~$0.40/month at 20 users. **Approved (2026-08-24)** - the
-      one recurring paid item in this list, explicitly signed off on given
-      the low cost. Plan-tier bump on the user pool itself (`UserPoolTier`
-      Essentials -> Plus), not just a CDK flag.
+- [x] **Cognito Plus tier (Threat Protection)** (implemented 2026-08-24,
+      **not deployed**) - compromised-credential detection (login password
+      checked against known-breach corpora) + risk-based adaptive auth
+      (IP-reputation/device signal scoring on sign-in) + exportable auth
+      event logs. $0.02/MAU, no free tier - confirmed ~$0.40/month at 20
+      users, **approved as the one recurring paid item in this stack**.
+      `featurePlan(FeaturePlan.PLUS)` +
+      `standardThreatProtectionMode(FULL_FUNCTION)`; verified in the
+      synthesized template as `UserPoolTier: PLUS` and
+      `UserPoolAddOns.AdvancedSecurityMode: ENFORCED`.
+      Note `FULL_FUNCTION` means threat protection **acts** (blocks/
+      challenges) rather than just recording - `AUDIT` mode is the
+      log-only alternative if it ever proves too aggressive.
 - [ ] **Before any of the above ships**: confirm `LoginForm.svelte`
       handles Cognito's `NEW_PASSWORD_REQUIRED` challenge - currently
       unverified, and relevant if `admin-create-user` is ever used as a
@@ -580,11 +605,64 @@ re-researched later:
       if `GET /profile` ever gets built; tracked in the "Profile feature"
       section below, not here.
 
-Also noted but not yet decided: dropping `localhost:5173` from prod CORS,
-trimming the Lambda's S3/DynamoDB grants to exclude delete actions it never
-uses, shortening the 30-day refresh token TTL, and validating `iss`/`aud`/
-`token_use` claims in the in-Lambda JWT check (verify exact Micronaut 5.1
-property names against the docs before implementing, not from memory).
+### Phase 3 - implemented 2026-08-24, not deployed
+
+- [x] **Cost/abuse CloudWatch alarm.** Lambda `Invocations`, Sum over 1
+      hour, `> 200` -> SNS topic `smallstash-alerts` -> email
+      (`SMALLSTASH_ALERT_EMAIL` in `.env`; the topic and alarm are still
+      created if it's unset, but nothing is subscribed so it fires
+      silently). `treatMissingData: NOT_BREACHING` because idle is the
+      normal state. 200/hour is far below the API stage ceiling (10 rps =
+      36,000/hour) so it fires long before throttling alone would bound the
+      damage. This is the piece the AWS Budgets can't be: Budgets are
+      notification-only and evaluate a few times a day, so a runaway could
+      burn most of a day before they notice. **AWS emails a confirmation
+      link on first deploy - the subscription delivers nothing until it's
+      clicked.**
+- [x] **Least-privilege IAM for the Lambda**, replacing
+      `grantReadWrite`/`grantReadWriteData` with explicit statements:
+      `s3:GetObject`/`s3:PutObject` scoped to `<bucket>/users/*`, and
+      `dynamodb:GetItem`/`dynamodb:PutItem`. The app never deletes
+      anything. What this removes matters: `grantReadWrite` includes
+      `s3:DeleteObject*`, which on a versioned bucket covers
+      `DeleteObjectVersion` - i.e. the ability to destroy the version
+      history that is the vault's only rollback path - and
+      `grantReadWriteData` includes `dynamodb:DeleteItem`, which could drop
+      the wrapped Vault Key. Verified in the template that the role's
+      inline policy now contains exactly those four actions, and that
+      `AWSLambdaBasicExecutionRole` is still attached so CloudWatch Logs
+      access survives.
+- [x] **`localhost:5173` removed from the deployed API's CORS allowlist**,
+      now opt-in via `SMALLSTASH_ALLOW_LOCALHOST_CORS=true` (or
+      `-c allowLocalhostCors=true`) for when `npm run dev` needs to reach
+      the real backend. Verified the template drops to a single origin by
+      default. CORS is a weak boundary for a bearer-token API - no cookies,
+      so a malicious origin can't ride an ambient session - but there's no
+      reason for production to advertise a development origin.
+- [x] **Refresh token TTL 30 days -> 7.** That window is how long a stolen
+      refresh token stays usable; any use inside it slides it forward, so
+      normal users rarely re-authenticate.
+
+Not done in Phase 3, with reasons: mandatory MFA (blocked on the missing
+TOTP enrolment flow - see above), and the AWS Budgets Action "blunt kill
+switch" (see below).
+
+- [ ] **AWS Budgets Action kill switch - decided, still unimplemented.**
+      The design is settled (see the Phase 3 decision earlier in this file):
+      an IAM Deny on `s3:*`/`dynamodb:*` attached to the **Lambda execution
+      role** - not `smallstash-deployer`, which is never in the live request
+      path - leaving root and the deployer untouched so investigation and
+      rollback stay possible. Deliberately deferred rather than rushed,
+      because it needs three pieces that each want care: a `ManagedPolicy`
+      holding the Deny, an execution role that `budgets.amazonaws.com` can
+      assume with `iam:AttachRolePolicy` on the Lambda role, and a
+      `CfnBudgetsAction` referencing an **existing budget by name** ("My
+      Monthly Cost Budget", created outside CDK) - a name-coupling that
+      breaks the deploy if the budget is ever renamed. Also worth deciding
+      the threshold deliberately: at $15 it only ever fires when something
+      is badly wrong, which is the intent. With the CloudWatch alarm above
+      now in place, the fast-detection half of this is already covered, so
+      the remaining value is purely automatic containment.
 
 ## Full teardown capability - now always DESTROY (2026-08-24)
 
@@ -1088,6 +1166,50 @@ one place allowed to hold the live Vault Key) had zero coverage.
 
 Verified: all 79 tests pass (`npm test`), `npm run build` clean and
 unaffected by the new devDependencies.
+
+## Browser/E2E testing with Playwright - deferred until all security phases land (2026-08-24)
+
+**Decision:** all browser-level verification is being collected into one
+piece of work that runs *after* the security-fix phases are complete,
+rather than a manual click-through after each phase. Playwright is the
+chosen vehicle. Deliberately not started yet.
+
+Cheap to set up when the time comes: a Playwright browser cache already
+exists on this machine (`~/AppData/Local/ms-playwright`), and Chrome and
+Edge are both installed, so `channel: 'chrome'` needs no download.
+
+What this work has to cover, in rough priority order:
+
+- [ ] **Validate the CSP, then flip it to enforcing** (see the security
+      review section above). Capture console messages and assert **zero**
+      CSP violations across every flow. Two constraints that make this
+      awkward by hand and are the reason it's automated instead:
+      - The CSP is added by **CloudFront**, so `npm run dev` (Vite) sends
+        no CSP header at all - local dev will look fine no matter how
+        broken the policy is. Testing must hit the deployed CloudFront URL,
+        or a local server that attaches the same header to `web/dist`.
+      - The single most important directive, `'wasm-unsafe-eval'` (hash-wasm's
+        Argon2id), is **only reachable after a successful login** -
+        Argon2id runs inside `unlockWithMasterPassword`/`createKeyMaterial`,
+        never on the login screen. So a test account is a prerequisite, not
+        an optional extra.
+- [ ] **A test account that doesn't need an email inbox.**
+      `admin-create-user` + `admin-set-user-password --permanent` bypasses
+      both email verification and the `NEW_PASSWORD_REQUIRED` challenge
+      (which `cognito.js`'s `signIn` still doesn't handle - see
+      architecture.md §9). Store in `.env`'s existing blank
+      `TEST_USER_EMAIL`/`TEST_USER_PASSWORD`.
+- [ ] **The features that have never been run in a real browser.** Per
+      CLAUDE.md, most of the UI is verified only by unit test + build:
+      MFA, offline unlock (Playwright's `context.setOffline(true)` makes
+      this genuinely testable), the 15-minute inactivity auto-lock,
+      change-Master-Password, the password generator's clipboard behaviour,
+      and now the invite-code signup path (both accepted and rejected
+      codes) and the 409 conflict on a stale `PUT /keys`.
+- [ ] **Decide whether Playwright also replaces the "Svelte component
+      tests" item below**, or sits alongside it. Component tests and E2E
+      answer different questions; doing both is defensible, doing neither
+      is the current state.
 
 - [ ] **Add Svelte component tests** - found during the above review,
       flagged rather than attempted unprompted (bolting on a second test
