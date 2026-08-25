@@ -41,8 +41,7 @@ import software.amazon.awscdk.services.cloudfront.ErrorResponse;
 import software.amazon.awscdk.services.cloudfront.HeadersFrameOption;
 import software.amazon.awscdk.services.cloudfront.HeadersReferrerPolicy;
 import software.amazon.awscdk.services.cloudfront.PriceClass;
-import software.amazon.awscdk.services.cloudfront.ResponseCustomHeader;
-import software.amazon.awscdk.services.cloudfront.ResponseCustomHeadersBehavior;
+import software.amazon.awscdk.services.cloudfront.ResponseHeadersContentSecurityPolicy;
 import software.amazon.awscdk.services.cloudfront.ResponseHeadersContentTypeOptions;
 import software.amazon.awscdk.services.cloudfront.ResponseHeadersFrameOptions;
 import software.amazon.awscdk.services.cloudfront.ResponseHeadersPolicy;
@@ -447,7 +446,7 @@ public class SmallstashStack extends Stack {
 
         ResponseHeadersPolicy securityHeaders = ResponseHeadersPolicy.Builder.create(this, "SiteSecurityHeaders")
                 .responseHeadersPolicyName("smallstash-security-headers")
-                .comment("HSTS/frame/type/referrer headers + report-only CSP for the PWA")
+                .comment("HSTS/frame/type/referrer headers + enforcing CSP for the PWA")
                 .securityHeadersBehavior(ResponseSecurityHeadersBehavior.builder()
                         // 1 year + subdomains. Safe here because the only
                         // host this applies to is the CloudFront domain,
@@ -473,31 +472,26 @@ public class SmallstashStack extends Stack {
                                 .referrerPolicy(HeadersReferrerPolicy.NO_REFERRER)
                                 .override(true)
                                 .build())
-                        .build())
-                // ENFORCING as of 2026-08-25 - flipped from
-                // Content-Security-Policy-Report-Only after
-                // web/e2e/login-authenticated.spec.js passed against the
-                // live site with zero CSP violations on an authenticated
-                // page (the one that matters: 'wasm-unsafe-eval', guarding
-                // hash-wasm's Argon2id, is only reachable post-login). Still
-                // a custom header rather than
-                // securityHeadersBehavior's contentSecurityPolicy - that
-                // helper only emits this same enforcing header, so there's
-                // no functional difference, but keeping it here means the
-                // whole policy stays in one place (the string above) instead
-                // of split across two CDK constructs.
-                //
-                // If this ever needs to go back to report-only (e.g. after
-                // a directive change that needs re-validating), rename the
-                // header back to "Content-Security-Policy-Report-Only" and
-                // re-run the E2E suite before flipping forward again -
-                // don't just trust that nothing changed.
-                .customHeadersBehavior(ResponseCustomHeadersBehavior.builder()
-                        .customHeaders(List.of(ResponseCustomHeader.builder()
-                                .header("Content-Security-Policy")
-                                .value(contentSecurityPolicy)
+                        // ENFORCING as of 2026-08-25, via this dedicated field
+                        // - NOT customHeadersBehavior, which is what the first
+                        // deploy attempt used and which CloudFront rejected
+                        // outright ("Invalid request provided:
+                        // AWS::CloudFront::ResponseHeadersPolicy", confirmed
+                        // against AWS's own CloudFormation example, which
+                        // shows Content-Security-Policy only ever set via
+                        // SecurityHeadersConfig, never CustomHeadersConfig).
+                        // The literal header name "Content-Security-Policy" is
+                        // reserved for this field; only the distinct string
+                        // "Content-Security-Policy-Report-Only" was ever
+                        // valid as a custom header, which is why the
+                        // report-only rollout worked via customHeadersBehavior
+                        // and the flip to enforcing did not - an earlier
+                        // comment here claiming "no functional difference"
+                        // between the two approaches was wrong.
+                        .contentSecurityPolicy(ResponseHeadersContentSecurityPolicy.builder()
+                                .contentSecurityPolicy(contentSecurityPolicy)
                                 .override(true)
-                                .build()))
+                                .build())
                         .build())
                 .build();
 
