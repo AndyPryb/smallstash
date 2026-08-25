@@ -1,0 +1,42 @@
+# Dependency update automation.
+#
+# This matters more here than in a typical project. smallStash is
+# zero-knowledge: the Argon2id/AES work happens in the browser, so the
+# Master Password and derived Vault Key sit in page memory while a session
+# is unlocked. A malicious version of any package that ends up in the
+# client bundle can read them directly - no need to break the crypto. The
+# frontend dependency tree is therefore a bigger practical attack surface
+# than the backend, and `hash-wasm` / `@noble/hashes` /
+# `amazon-cognito-identity-js` are the crown jewels specifically.
+#
+# See docs/todo.md's security review (Phase 2, "XSS hardening beyond CSP").
+version: 2
+
+updates:
+  # PWA client - the highest-risk tree, see above.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Keep routine noise to one PR; security updates still arrive
+      # individually and immediately regardless of this grouping.
+      dev-dependencies:
+        dependency-type: development
+
+  # Backend Lambda (Micronaut).
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # CDK infra. Lower blast radius than the other two - it never runs in a
+  # browser or in the Lambda - but a compromised CDK dependency executes
+  # with deploy credentials, which is its own problem.
+  - package-ecosystem: maven
+    directory: /infra
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

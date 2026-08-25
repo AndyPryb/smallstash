@@ -358,19 +358,46 @@ to implement together as one pass:
       the concurrency API) - more moving parts, another privileged Lambda
       as new attack surface, for a personal project where the native
       IAM-Deny option already achieves the same practical outcome.
-- [ ] **CloudFront `ResponseHeadersPolicy.SECURITY_HEADERS`** (managed
-      policy - HSTS, X-Frame-Options, X-Content-Type-Options,
-      Referrer-Policy) plus a **custom CSP** on top (the managed policy
-      doesn't include one). Must include `'wasm-unsafe-eval'` in
-      `script-src` - `hash-wasm`'s Argon2id runs as WebAssembly and will
-      silently break without it. **Rollout plan, not a paper policy**:
-      ship first as `Content-Security-Policy-Report-Only` (logs violations,
-      doesn't block), exercise the full app (login, signup, vault CRUD,
-      MFA, offline unlock) watching the browser console/report endpoint
-      for violations neither reading the source nor guessing could catch
-      (an overlooked font/icon reference, a Cognito endpoint not in
-      `connect-src`, etc.), then flip to enforcing once a real session
-      produces zero violations.
+- [x] **CloudFront security headers + CSP** (implemented 2026-08-24, **not
+      deployed**). A `ResponseHeadersPolicy` (`SiteSecurityHeaders`,
+      attached to the distribution's default behaviour) sets HSTS
+      (1 year, includeSubdomains), `X-Content-Type-Options`,
+      `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`, plus a
+      hand-written CSP.
+      Written **strict**, and that's justified rather than optimistic -
+      checked against the real build output, not assumed: Vite emits no
+      inline `<script>` or `<style>` (both external with `src`/`href`),
+      there are no inline `style=""` attributes in `web/src`, and there are
+      no Svelte transitions - which are the usual reason a Svelte app needs
+      `'unsafe-inline'` in `style-src`. Every network origin was likewise
+      enumerated from source and the built bundle; everything is
+      same-origin except Cognito and the API.
+      `'wasm-unsafe-eval'` is in `script-src` because `hash-wasm` runs
+      Argon2id as WebAssembly. **Without it unlock fails in a way that
+      looks like "wrong Master Password", not like a CSP problem** - worth
+      remembering if unlock ever breaks right after a CSP change.
+      The API host is a `*.execute-api.<region>.amazonaws.com` wildcard
+      rather than the exact endpoint: the real one isn't known until
+      `HttpApi` is constructed, and `HttpApi`'s CORS needs the
+      distribution's domain name, so naming it exactly would be a circular
+      dependency.
+- [ ] ⚠️ **Flip the CSP from report-only to enforcing.** It currently ships
+      as `Content-Security-Policy-Report-Only` via `customHeadersBehavior`
+      (`securityHeadersBehavior.contentSecurityPolicy` only emits the
+      enforcing variant, hence the custom header). **Until it's flipped it
+      is documentation, not protection** - the browser logs what it would
+      have blocked and blocks nothing.
+      **There is no reporting endpoint configured**, so violations appear
+      *only* in the browser devtools console - they are not collected
+      anywhere. The manual pass therefore has to be done with devtools
+      open: login, signup (incl. the invite code), vault CRUD, password
+      generator, MFA, offline unlock, and change-Master-Password. Zero
+      violations across all of those, then rename the header to
+      `Content-Security-Policy` in `SmallstashStack.java` (marked there
+      with a `!! FLIP TO ENFORCING !!` comment) and redeploy.
+      Adding a `report-to`/`report-uri` endpoint is a possible alternative
+      to the manual pass, but it needs somewhere to receive the reports -
+      disproportionate here versus just watching the console once.
 - [ ] **Mandatory MFA** (`Mfa.REQUIRED`) - UI (`MfaCodeForm.svelte`)
       already exists.
 - [ ] **`preventUserExistenceErrors: true`** on the user pool client -
@@ -416,23 +443,30 @@ to implement together as one pass:
 - [ ] **XSS hardening beyond CSP** (CSP is the primary lever - see above -
       but layer these too, since CSP mitigates delivery, not every
       injection path):
-      - Grep `web/src` to confirm Svelte's `{@html ...}` directive is
-        never used on anything derived from vault entry data
-        (title/username/URL/notes) - `{expression}` auto-escapes,
-        `{@html}` deliberately opts out and is the most common way a
-        Svelte app introduces XSS.
-      - Reject non-`http(s)` schemes on the entry `url` field before
-        rendering it as a clickable link (extends the existing
-        scheme-less-URL fix in `EntryListItem.svelte` - a saved
-        `javascript:...` URL would otherwise execute on click).
-      - `npm audit` + Dependabot as a standing/recurring check, not a
-        one-time pass - the real crown-jewel dependencies are
-        `hash-wasm`/`@noble/hashes`; a compromised transitive dependency
-        is a more realistic path in than a novel XSS in first-party code.
-      - Confirm the Master Key/session key material never touches
-        `localStorage`/`sessionStorage` (in-memory only) - believed true
-        from the architecture doc's description of `session.js`, worth an
-        explicit check rather than assumption.
+      - [x] Confirmed `{@html ...}` is used **nowhere** in `web/src`
+        (2026-08-24, by grep). `{expression}` auto-escapes; `{@html}`
+        deliberately opts out and is the most common way a Svelte app
+        introduces XSS. Worth re-checking if it ever appears.
+      - [x] **Fixed a live `javascript:` XSS** (commit `45ccec5`), not a
+        hypothetical one: `normalizedUrl` passed any scheme-looking prefix
+        straight into the `<a href>`, so an entry saved with
+        `javascript:alert(1)` executed on click. Now only `http`/`https`
+        keep their scheme; anything else is stripped and treated as a bare
+        hostname, so the worst case is a dead link. Moved to `lib/url.js`
+        to make it testable (`url.test.js` covers `javascript:`/`data:`/
+        `vbscript:`/`file:`, case variants, and the `javascript://`
+        comment-smuggling form).
+      - [x] `npm audit` + Dependabot (2026-08-24). `npm audit --omit=dev`
+        reports **0 vulnerabilities**; `.github/dependabot.yml` now covers
+        `web/` (npm) and both Maven projects, weekly, with dev-dependency
+        updates grouped to keep routine noise to one PR. Security updates
+        still arrive individually regardless of grouping.
+      - [x] Confirmed the Master Key/session key material never touches
+        `localStorage`/`sessionStorage` (2026-08-24, verified by grep, not
+        assumed): the only `localStorage` use in `web/src` is
+        `getLastAccount`'s `{email, sub}` for the offline-unlock flow -
+        both non-secret. Key material is a module-level variable in
+        `session.js` with a 15-minute inactivity auto-lock.
       - Trusted Types (`require-trusted-types-for 'script'` CSP directive)
         considered and deliberately skipped for now - strongest available
         DOM-XSS defense, but more setup/browser-support fiddling than a

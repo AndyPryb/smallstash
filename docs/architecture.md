@@ -319,6 +319,48 @@ becomes an observed problem.
   and meaningfully more engineering than this is worth before the PWA
   even exists.
 
+### 5a. Browser-side hardening — the CSP, and why it matters most here
+
+The zero-knowledge design deliberately puts the crown jewels in the
+browser: Argon2id runs client-side, so the Master Password and derived
+Vault Key are necessarily in page memory while a session is unlocked.
+That's correct and unavoidable — there is no version of this architecture
+where they aren't. The consequence is that **the browser is the one place
+where a single vulnerability defeats everything else**. A script executing
+in this origin doesn't need to break AES or Argon2id; it reads the key
+straight out of memory, and every backend control becomes irrelevant.
+
+That's why the in-memory residency is bounded (15-minute inactivity
+auto-lock, `session.js`) and why a **CSP** is the highest-value remaining
+control. It doesn't make XSS impossible; it makes the two usual delivery
+paths — injected inline `<script>`, attacker-hosted JS — fail closed even
+if some other bug lets untrusted input reach the DOM.
+
+The policy is strict (no `'unsafe-inline'` anywhere, `object-src`/`base-uri`
+`'none'`, `frame-ancestors 'none'`), which was verified as achievable
+against the real build output rather than assumed: Vite emits no inline
+script or style, there are no inline `style=""` attributes, and there are
+no Svelte transitions — the usual reason a Svelte app needs
+`'unsafe-inline'` in `style-src`.
+
+Two things to know before touching it:
+
+- **`'wasm-unsafe-eval'` in `script-src` is required**, because `hash-wasm`
+  runs Argon2id as WebAssembly. Remove it and unlock fails in a way that
+  looks like "wrong Master Password" rather than like a CSP problem.
+- **It is `Report-Only` today**, i.e. documentation rather than protection,
+  and there is no reporting endpoint — violations surface only in the
+  devtools console. Flipping it to enforcing is tracked in
+  [todo.md](todo.md).
+
+Related, and equally part of "the browser is the crown jewel": the vault
+entry `url` field is sanitised (`lib/url.js`) so a saved `javascript:` URL
+can't execute on click, `{@html}` is used nowhere, and no key material is
+ever written to `localStorage`/`sessionStorage`. Dependency updates are
+automated (`.github/dependabot.yml`) because a compromised transitive npm
+package is a more realistic path to that in-memory key than a novel XSS in
+first-party code.
+
 ## 6. Cost model (why this stays cheap)
 
 All figures assume the stated usage pattern: a handful of users, each
@@ -525,6 +567,13 @@ as code, every AWS resource this project needs:
   in place regardless), CORS, and **access logging** to a 30-day log group
   (*pending deploy*) recording source IP / time / method / route / status /
   request id — deliberately no bodies.
+
+- CloudFront `ResponseHeadersPolicy` on the site distribution — HSTS
+  (1yr + subdomains), `X-Content-Type-Options`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, and a strict CSP — *pending deploy*.
+  **The CSP currently ships as `Content-Security-Policy-Report-Only`**, so
+  it logs violations and blocks nothing; see §5a and [todo.md](todo.md) for
+  the flip-to-enforcing checklist.
 
 ⚠️ **Two deploy-time gotchas, both of which fail confusingly if missed:**
 
