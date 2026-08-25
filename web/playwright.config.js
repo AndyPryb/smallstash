@@ -2,37 +2,37 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * Browser/E2E config - see docs/todo.md "Browser/E2E testing with
- * Playwright" for the full decision record and what this has to cover
- * (CSP validation, MFA, offline unlock, invite-code signup, the 409
- * conflict path, etc.). Deliberately separate from web/'s node:test suite
- * (`npm test`) - this drives a real browser against a real deployed URL or
- * a served build, not pure lib/ logic.
- *
- * Nothing is targeted here yet: this file only proves the harness itself
- * works (an existing Playwright Chromium cache on this machine is reused,
- * no download) ahead of writing the actual specs once the security review
- * is deployed.
+ * Playwright" and web/e2e/README.md for the decision record and priority
+ * list. Drives a real browser against the deployed CloudFront site, not
+ * `npm run dev` - the CSP is a CloudFront response header, so Vite's dev
+ * server sends none of it and would make every test misleadingly "pass".
  */
 export default defineConfig({
   testDir: './e2e',
 
-  // `channel: 'chrome'` was considered and deliberately NOT used - it
-  // depends on a real Chrome install existing on whatever machine runs this
-  // (CI would need a separate step). The bundled Chromium project below is
-  // what actually keeps this portable; the local cache reuse observed here
-  // is a one-time convenience, not something the config depends on.
+  // Bundled Chromium project, not `channel: 'chrome'` - portable to a fresh
+  // machine/CI runner with just `npx playwright install chromium`, doesn't
+  // quietly depend on a specific local browser install.
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
 
-  // baseURL is intentionally unset here - CSP is a CloudFront response
-  // header (see architecture.md sec 5a), so `npm run dev`'s Vite server
-  // sends none of it. Specs that need the real header (the CSP validation
-  // pass) must point PLAYWRIGHT_BASE_URL at the deployed CloudFront URL, or
-  // at a local static server that replays the same header against
-  // web/dist - not at Vite dev.
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL,
+    // The live deployed site. Overridable because the stack's CloudFront
+    // domain changes on every full destroy/recreate (see docs/todo.md
+    // "Live stack outputs") - hardcoding it here would silently start
+    // testing a dead URL after the next teardown.
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'https://ds9wv7ctss47x.cloudfront.net',
     trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
   },
+
+  // Serial, not parallel: several specs share one live Cognito pool (the
+  // invite code, and later the one shared test account) - concurrent runs
+  // risk racing each other (e.g. two tests colliding on the same account's
+  // MFA/session state). Not worth the speed for a suite this size.
+  fullyParallel: false,
+  workers: 1,
+
+  reporter: [['list']],
 });

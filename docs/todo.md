@@ -1378,7 +1378,7 @@ one place allowed to hold the live Vault Key) had zero coverage.
 Verified: all 79 tests pass (`npm test`), `npm run build` clean and
 unaffected by the new devDependencies.
 
-## Browser/E2E testing with Playwright - harness installed, specs not written (2026-08-24)
+## Browser/E2E testing with Playwright - negative pre-login specs passing live (2026-08-25)
 
 **Decision:** all browser-level verification is being collected into one
 piece of work that runs *after* the security-fix phases are complete,
@@ -1403,35 +1403,72 @@ chosen vehicle.
       fresh machine or CI runner would just need one `npx playwright
       install chromium`, not a specific local Chrome/Edge install. `npm
       test` re-verified unaffected (still 97/97).
-
-What this work has to cover, in rough priority order:
-
-- [ ] **Validate the CSP, then flip it to enforcing** (see the security
-      review section above). Capture console messages and assert **zero**
-      CSP violations across every flow. Two constraints that make this
-      awkward by hand and are the reason it's automated instead:
-      - The CSP is added by **CloudFront**, so `npm run dev` (Vite) sends
-        no CSP header at all - local dev will look fine no matter how
-        broken the policy is. Testing must hit the deployed CloudFront URL,
-        or a local server that attaches the same header to `web/dist`.
-      - The single most important directive, `'wasm-unsafe-eval'` (hash-wasm's
-        Argon2id), is **only reachable after a successful login** -
-        Argon2id runs inside `unlockWithMasterPassword`/`createKeyMaterial`,
-        never on the login screen. So a test account is a prerequisite, not
-        an optional extra.
-- [ ] **A test account that doesn't need an email inbox.**
-      `admin-create-user` + `admin-set-user-password --permanent` bypasses
-      both email verification and the `NEW_PASSWORD_REQUIRED` challenge
-      (which `cognito.js`'s `signIn` still doesn't handle - see
-      architecture.md §9). Store in `.env`'s existing blank
-      `TEST_USER_EMAIL`/`TEST_USER_PASSWORD`.
+- [x] **Pre-login negative specs (2026-08-25) - 13/13 passing against the
+      live site**, not assumed from a template diff: actually run, twice.
+      `web/e2e/fixtures.js` (a `page` fixture that captures every
+      `securitypolicyviolation` DOM event - fires for both `Report-Only`
+      and enforcing CSP, `event.disposition` distinguishes them, which is
+      the whole reason this suite exists), `web/e2e/env.js` (reads
+      `SMALLSTASH_INVITE_CODE` from the repo-root `.env`, never logged),
+      `security-headers.spec.js`, `login-negative.spec.js`,
+      `signup-negative.spec.js` (wrong invite code rejected by the
+      PreSignUp trigger, every client-side validation path, no CSP
+      violations on any of it).
+      **What the first run actually caught - worth remembering for any
+      future spec against this app**: `getByLabel('Login password')`
+      matched *two* fields, not one. Playwright's `getByLabel` does a
+      substring match against the entire computed label text - which in
+      this app includes the `<small>` hint nested inside the same
+      `<label>` - and the Master Password field's own hint text says
+      "kept separate from your login password on purpose". So a bare
+      `'Login password'` string matched both the Login Password field and
+      the Master Password field. Not an app bug - fixed by anchoring the
+      regex to the start (`/^Login password/i`), no markup changes needed.
+      A second false start: `{ exact: true }` against the same wrong
+      assumption doesn't error, it just finds nothing and times out after
+      30s waiting for an element that will never appear - slower to debug
+      than the strict-mode-violation the substring version threw
+      immediately. Same anchored-regex fix applies to Master
+      Password/Confirm login password/Confirm Master Password.
+- [ ] **Registration, in progress.** Real self-service signup through the
+      browser (not `admin-create-user` - this suite is scoped to only
+      interact with the app the way a real user would, per the 2026-08-25
+      testing-session ground rules). A spec can fill and submit the signup
+      form, but the emailed confirmation code needs the human in the loop -
+      test account `the demo account`.
+- [ ] **The actual point of this whole suite, still ahead**: assert **zero**
+      CSP violations across every *authenticated* flow, particularly
+      `'wasm-unsafe-eval'` (hash-wasm's Argon2id) - only reachable after a
+      successful login (`unlockWithMasterPassword`/`createKeyMaterial`),
+      so nothing the pre-login specs cover exercises it. Then flip the CSP
+      header in `SmallstashStack.java` from `Report-Only` to enforcing (the
+      `!! FLIP TO ENFORCING !!` comment there) and redeploy.
 - [ ] **The features that have never been run in a real browser.** Per
       CLAUDE.md, most of the UI is verified only by unit test + build:
       MFA, offline unlock (Playwright's `context.setOffline(true)` makes
       this genuinely testable), the 15-minute inactivity auto-lock,
       change-Master-Password, the password generator's clipboard behaviour,
-      and now the invite-code signup path (both accepted and rejected
-      codes) and the 409 conflict on a stale `PUT /keys`.
+      and the 409 conflict on a stale `PUT /keys`.
+- [ ] **Password reset** (`ForgotPasswordForm.svelte`) - same shape as
+      registration above, needs an emailed code, human in the loop again.
+- [ ] **The `null`-in-error-message bug** reported 2026-08-25 ("Change
+      Login Password... Password did not conform with policy: null").
+      Diagnosed already, not yet fixed: `"did not conform with policy"`
+      does not appear anywhere in this repo's source - confirmed by grep -
+      so this is AWS Cognito's own `InvalidPasswordException.message`,
+      passed straight through by `err.message ?? String(err)`
+      (`ChangeLoginPasswordForm.svelte`), not a client-side formatting bug.
+      The "null" is AWS's backend leaving a template slot unfilled - not
+      fixable by changing a template string that doesn't exist in our
+      code. Available fix: catch this specific exception (by name or by
+      matching the message prefix) and substitute a fixed, friendly
+      message instead of surfacing Cognito's raw text verbatim. Deferred
+      to the logged-in test phase since that's where it's reachable
+      (`ChangeLoginPasswordForm` requires an active session) - worth
+      checking whether `SignupForm`'s initial `SignUp` call can hit the
+      same Cognito exception (e.g. a policy-compliant but known-breached
+      password, now that Cognito Plus/threat protection is live) since
+      that code path shares the same `err.message ?? String(err)` pattern.
 - [ ] **Decide whether Playwright also replaces the "Svelte component
       tests" item below**, or sits alongside it. Component tests and E2E
       answer different questions; doing both is defensible, doing neither
