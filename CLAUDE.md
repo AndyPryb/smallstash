@@ -116,7 +116,11 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   `.github/dependabot.yml`, Cognito Plus/threat protection,
   `preventUserExistenceErrors`, 7-day refresh tokens, in-Lambda `iss`/`aud`
   JWT validation, least-privilege Lambda IAM, localhost dropped from prod
-  CORS, and a Lambda-invocation-spike alarm → SNS email.
+  CORS, a Lambda-invocation-spike alarm → SNS email, and a Budgets Action
+  cost kill switch on a CDK-owned `smallstash-app` budget (auto-attaches an
+  S3/DynamoDB Deny to the **Lambda execution role** — root and
+  `smallstash-deployer` stay untouched; recovery is detaching the policy,
+  no redeploy).
 - ⚠️ **Two things look done but aren't, and both fail quietly:** the CSP
   ships as **`Content-Security-Policy-Report-Only`** (logs violations,
   blocks nothing) until the header is renamed; and the SNS alert email

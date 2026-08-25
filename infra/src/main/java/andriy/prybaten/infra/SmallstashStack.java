@@ -16,6 +16,8 @@ import software.amazon.awscdk.services.apigatewayv2.HttpApi;
 import software.amazon.awscdk.services.apigatewayv2.HttpMethod;
 import software.amazon.awscdk.services.apigatewayv2.HttpStage;
 import software.amazon.awscdk.services.apigatewayv2.ThrottleSettings;
+import software.amazon.awscdk.services.budgets.CfnBudget;
+import software.amazon.awscdk.services.budgets.CfnBudgetsAction;
 import software.amazon.awscdk.services.cloudwatch.Alarm;
 import software.amazon.awscdk.services.cloudwatch.ComparisonOperator;
 import software.amazon.awscdk.services.cloudwatch.MetricOptions;
@@ -57,7 +59,11 @@ import software.amazon.awscdk.services.dynamodb.PointInTimeRecoverySpecification
 import software.amazon.awscdk.services.dynamodb.Table;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
+import software.amazon.awscdk.services.iam.Effect;
+import software.amazon.awscdk.services.iam.ManagedPolicy;
 import software.amazon.awscdk.services.iam.PolicyStatement;
+import software.amazon.awscdk.services.iam.Role;
+import software.amazon.awscdk.services.iam.ServicePrincipal;
 import software.amazon.awscdk.services.lambda.Runtime;
 import software.amazon.awscdk.services.logs.LogGroup;
 import software.amazon.awscdk.services.logs.RetentionDays;
@@ -707,6 +713,120 @@ public class SmallstashStack extends Stack {
                 .treatMissingData(TreatMissingData.NOT_BREACHING)
                 .build()
                 .addAlarmAction(new SnsAction(alertTopic));
+
+        // ---------------------------------------------------------------
+        // Cost kill switch (security review Phase 3)
+        //
+        // The alarm above is detection; this is containment. When spend on
+        // this stack's own budget crosses the limit, AWS Budgets attaches a
+        // Deny policy to the backend Lambda's execution role, and every vault
+        // read and write starts failing. That is deliberately blunt - a full
+        // outage is the intended behaviour, on the reasoning that for a
+        // personal app an unexplained bill is worse than downtime.
+        //
+        // Two things it deliberately does NOT touch: the root user, and
+        // `smallstash-deployer`. Neither is in the live request path, so
+        // denying them would achieve nothing while removing the very access
+        // needed to investigate and undo this. Recovery is detaching the
+        // policy - no redeploy required.
+        //
+        // The budget is created *here* rather than referencing one made in
+        // the console: a CfnBudgetsAction has to name its budget, and pointing
+        // at a hand-made one would silently break every future deploy the
+        // moment that budget was renamed. This one belongs to the app, and any
+        // personal budgets stay independent of it.
+        // ---------------------------------------------------------------
+
+        // Normal running cost is roughly $0.40/month (Cognito Plus) plus
+        // pennies, so $10 is far enough above the noise floor that tripping it
+        // means something is genuinely wrong, and low enough to stop real
+        // damage. It is a *monthly* budget, so it resets on the 1st.
+        final Number killSwitchLimitUsd = 10;
+
+        CfnBudget appBudget = CfnBudget.Builder.create(this, "AppBudget")
+                .budget(CfnBudget.BudgetDataProperty.builder()
+                        .budgetName("smallstash-app")
+                        .budgetType("COST")
+                        .timeUnit("MONTHLY")
+                        .budgetLimit(CfnBudget.SpendProperty.builder()
+                                .amount(killSwitchLimitUsd)
+                                .unit("USD")
+                                .build())
+                        .build())
+                .build();
+
+        // Created but attached to nothing. AWS Budgets attaches it on trigger;
+        // an explicit Deny beats any Allow, so this shuts the data plane off
+        // regardless of what the role is otherwise granted.
+        ManagedPolicy killSwitchPolicy = ManagedPolicy.Builder.create(this, "CostKillSwitchPolicy")
+                .managedPolicyName("smallstash-cost-kill-switch")
+                .description("Attached by AWS Budgets to halt smallStash data access when the app budget is exceeded")
+                .statements(List.of(PolicyStatement.Builder.create()
+                        .effect(Effect.DENY)
+                        .actions(List.of("s3:*", "dynamodb:*"))
+                        .resources(List.of("*"))
+                        .build()))
+                .build();
+
+        // The conditions are AWS's documented cross-service confused-deputy
+        // prevention: without them, any budget in any account could in
+        // principle induce Budgets to assume this role.
+        ServicePrincipal budgetsPrincipal = new ServicePrincipal("budgets.amazonaws.com");
+        Role budgetActionRole = Role.Builder.create(this, "BudgetActionRole")
+                .description("Assumed by AWS Budgets to apply the smallStash cost kill switch")
+                .assumedBy(budgetsPrincipal.withConditions(Map.of(
+                        "ArnLike", Map.of("aws:SourceArn",
+                                "arn:aws:budgets::" + this.getAccount() + ":budget/*"),
+                        "StringEquals", Map.of("aws:SourceAccount", this.getAccount()))))
+                .build();
+
+        // Scoped hard in both directions: this role may attach only *this*
+        // policy, and only to *this* Lambda's role. AWS's own example grants
+        // attach/detach on "*" for users, groups and roles alike; there's no
+        // reason to hand a budget that much reach.
+        budgetActionRole.addToPolicy(PolicyStatement.Builder.create()
+                .actions(List.of("iam:AttachRolePolicy", "iam:DetachRolePolicy"))
+                .resources(List.of(backend.getRole().getRoleArn()))
+                .conditions(Map.of("ArnEquals",
+                        Map.of("iam:PolicyARN", killSwitchPolicy.getManagedPolicyArn())))
+                .build());
+
+        // A budget action must have at least one subscriber, so the kill
+        // switch only exists when there's an address to tell. Skipping it
+        // silently would be worse than not having it: a containment control
+        // that fires with nobody informed is how an outage becomes a mystery.
+        if (alertEmail != null) {
+            CfnBudgetsAction killSwitch = CfnBudgetsAction.Builder.create(this, "CostKillSwitch")
+                    .budgetName("smallstash-app")
+                    .actionType("APPLY_IAM_POLICY")
+                    // ACTUAL, not FORECASTED - a forecast can spike early in
+                    // the month off very little real spend, and this action is
+                    // destructive enough that it should only fire on money
+                    // actually spent.
+                    .notificationType("ACTUAL")
+                    .actionThreshold(CfnBudgetsAction.ActionThresholdProperty.builder()
+                            .type("ABSOLUTE_VALUE")
+                            .value(killSwitchLimitUsd)
+                            .build())
+                    // AUTOMATIC is the point - MANUAL would just be another
+                    // email needing a human, which the alarm already covers.
+                    .approvalModel("AUTOMATIC")
+                    .executionRoleArn(budgetActionRole.getRoleArn())
+                    .definition(CfnBudgetsAction.DefinitionProperty.builder()
+                            .iamActionDefinition(CfnBudgetsAction.IamActionDefinitionProperty.builder()
+                                    .policyArn(killSwitchPolicy.getManagedPolicyArn())
+                                    .roles(List.of(backend.getRole().getRoleName()))
+                                    .build())
+                            .build())
+                    .subscribers(List.of(CfnBudgetsAction.SubscriberProperty.builder()
+                            .type("EMAIL")
+                            .address(alertEmail)
+                            .build()))
+                    .build();
+            // The action references the budget by name, so the budget has to
+            // exist first - CloudFormation can't infer that from a string.
+            killSwitch.addDependency(appBudget);
+        }
 
         // ---------------------------------------------------------------
         // Outputs

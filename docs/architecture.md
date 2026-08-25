@@ -413,14 +413,24 @@ account into someone else's compute budget:
 | `reservedConcurrentExecutions(5)` | Lambda | GB-seconds under a flood — throttling caps requests/sec, concurrency caps how many run *at once* |
 | Stage throttle (10 rps / 20 burst) | HTTP API stage | request rate |
 
-Note the account's two AWS Budgets ($15 monthly, $1 zero-spend) are
-**notification-only and evaluate roughly 3x/day** — they are a smoke alarm,
-not a circuit breaker. A **CloudWatch alarm** now covers fast detection
-(Lambda invocations, Sum > 200/hour → SNS email, so minutes rather than
-hours). The remaining gap is automatic *containment*: a Budgets Action
-applying a Deny policy to the Lambda's **execution role** — not
-`smallstash-deployer`, which is never in the live request path — is
-designed but not built, see [todo.md](todo.md).
+Any personal AWS Budgets on the account are **notification-only and
+evaluate roughly 3x/day** — a smoke alarm, not a circuit breaker. Two
+things now sit on top of that, in the order they'd fire:
+
+1. **Detection (minutes)** — a CloudWatch alarm on Lambda invocations
+   (Sum > 200/hour) → SNS → email.
+2. **Containment (automatic)** — a **Budgets Action kill switch**. The
+   stack owns its own budget (`smallstash-app`, $10/month, deliberately
+   *not* a reference to a console-made one, which would break deploys if
+   renamed). On breach, AWS Budgets attaches a Deny (`s3:*`/`dynamodb:*`)
+   to the backend Lambda's **execution role**, and the app stops working.
+
+That second one is blunt on purpose: a full outage, on the reasoning that
+for a personal app an unexplained bill is worse than downtime. Critically
+it does **not** touch root or `smallstash-deployer` — neither is in the
+live request path, so denying them would achieve nothing while removing
+the access needed to investigate. **Recovery is detaching the policy; no
+redeploy required.**
 
 **Cognito tier:** the $0 line above no longer holds exactly. The pool is on
 the **Plus** tier for Threat Protection, which is **$0.02/MAU with no free
@@ -597,6 +607,10 @@ as code, every AWS resource this project needs:
   (Sum > 200/hour) — *pending deploy*. The email subscription only exists
   if `SMALLSTASH_ALERT_EMAIL` is set, and **AWS requires clicking a
   confirmation link before it delivers anything**.
+- A CDK-owned budget (`smallstash-app`, $10/month) plus a Budgets Action
+  kill switch, its Deny policy, and the scoped role Budgets assumes to
+  apply it (§6) — *pending deploy*. Also gated on
+  `SMALLSTASH_ALERT_EMAIL`, since a budget action requires a subscriber.
 - HTTP API with a native `HttpUserPoolAuthorizer`, explicit throttling
   (rate 10/s, burst 20 — cheap insurance given real usage is a handful of
   requests every few days; AWS's much higher account-level default stays
