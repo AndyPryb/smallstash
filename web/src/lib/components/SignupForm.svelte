@@ -16,6 +16,7 @@
     signUpAndInitializeVault,
   } from '../session.js';
   import { validateMasterPassword, MIN_MASTER_PASSWORD_LENGTH } from '../policy.js';
+  import { friendlyAuthErrorMessage } from '../errors.js';
   import PasswordField from './PasswordField.svelte';
 
   /** @type {{ oncomplete: (detail: { vaultDocument: object }) => void, oncancel: () => void }} */
@@ -86,7 +87,11 @@
       await registerAccount(email, loginPassword, inviteCode.trim());
       step = 'confirm';
     } catch (err) {
-      error = err.message ?? String(err);
+      // The pattern check above catches most weak passwords before this
+      // point, but not a policy-compliant one Cognito's compromised
+      // -credential check (Plus tier) rejects anyway - same
+      // InvalidPasswordException, same friendlier substitution.
+      error = friendlyAuthErrorMessage(err);
     } finally {
       busy = false;
     }
