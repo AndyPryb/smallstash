@@ -23,8 +23,9 @@ Playwright" for the full decision record. Status and running order below.
       would). Needs the human in the loop for the emailed confirmation
       code - a spec can fill the signup form and submit, but can't read
       the test account's inbox.
-- [ ] **Logged-in cases** - MFA, offline unlock (`context.setOffline(true)`),
-      the 15-minute inactivity auto-lock, change-Master-Password (also
+- [ ] **Logged-in cases** - offline unlock (`context.setOffline(true)`,
+      already found a real bug, see docs/todo.md), the 15-minute
+      inactivity auto-lock, change-Master-Password (also
       where the `null`-in-error-message bug reported 2026-08-25 lives -
       see docs/todo.md), the password generator's clipboard behaviour, and
       the 409 conflict on a stale `PUT /keys`.

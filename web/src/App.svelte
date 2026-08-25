@@ -4,19 +4,14 @@
   import SignupForm from './lib/components/SignupForm.svelte';
   import ForgotPasswordForm from './lib/components/ForgotPasswordForm.svelte';
   import OfflineUnlockForm from './lib/components/OfflineUnlockForm.svelte';
-  import MfaCodeForm from './lib/components/MfaCodeForm.svelte';
   import VaultView from './lib/components/VaultView.svelte';
   import {
     signInAndUnlock,
     unlockOffline,
     getLastAccount,
     clearSession,
-    completeMfaLogin,
-    cancelMfaLogin,
-    isMfaPending,
     onAutoLock,
     resetInactivityTimer,
-    MfaRequiredError,
   } from './lib/session.js';
 
   /** @type {'login' | 'signup' | 'forgot-password'} */
@@ -39,7 +34,6 @@
   let lastAccount = $state(getLastAccount());
   let showOffline = $derived((!online || forceOffline) && lastAccount !== null);
 
-  let mfaPending = $state(false);
   let lockedByInactivity = $state(false);
 
   onMount(() => {
@@ -114,46 +108,14 @@
       vaultDocument = await signInAndUnlock(detail.email, detail.loginPassword, detail.masterPassword);
       lastAccount = getLastAccount();
     } catch (err) {
-      if (err instanceof MfaRequiredError) {
-        mfaPending = true;
-      } else {
-        error = err.message ?? String(err);
-        if (looksLikeNetworkFailure(err) && getLastAccount()) {
-          lastAccount = getLastAccount();
-          forceOffline = true;
-        }
-      }
-    } finally {
-      loading = false;
-    }
-  }
-
-  /** @param {string} code */
-  async function handleMfaVerify(code) {
-    error = '';
-    loading = true;
-    try {
-      vaultDocument = await completeMfaLogin(code);
-      mfaPending = false;
-      lastAccount = getLastAccount();
-    } catch (err) {
       error = err.message ?? String(err);
-      // A wrong code leaves the pending MFA attempt intact (session.js only
-      // clears it on success) so the user can just retry - only fall back to
-      // the login form if something after the code succeeded/failed in a way
-      // that already consumed it (e.g. a wrong Master Password).
-      if (!isMfaPending()) {
-        mfaPending = false;
+      if (looksLikeNetworkFailure(err) && getLastAccount()) {
+        lastAccount = getLastAccount();
+        forceOffline = true;
       }
     } finally {
       loading = false;
     }
-  }
-
-  function handleMfaCancel() {
-    cancelMfaLogin();
-    mfaPending = false;
-    error = '';
   }
 
   /** @param {{ masterPassword: string }} detail */
@@ -185,8 +147,6 @@
     // e.g. a forceOffline latched by an earlier network hiccup would strand
     // the user on the offline-unlock screen after an explicit sign-out, even
     // if they're back online and want to sign in as someone else.
-    cancelMfaLogin();
-    mfaPending = false;
     forceOffline = false;
     lockedByInactivity = false;
     error = '';
@@ -245,8 +205,6 @@
 
   {#if vaultDocument}
     <VaultView bind:vaultDocument onsignout={handleSignOut} />
-  {:else if mfaPending}
-    <MfaCodeForm onverify={handleMfaVerify} oncancel={handleMfaCancel} {loading} />
   {:else if showOffline}
     <OfflineUnlockForm
       email={lastAccount.email}

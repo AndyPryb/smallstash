@@ -286,18 +286,11 @@ becomes an observed problem.
   Cognito's **Hosted UI** (OAuth2 authorization-code grant), which does
   SRP internally, so this doesn't compromise testability (guide owed, see
   [todo.md](todo.md)).
-- **Optional TOTP MFA** on the Cognito login step — cheap, adds a layer
-  independent of the vault's own crypto. Not required, user's choice at
-  signup.
-  Making it **required is blocked, not merely pending** — worth knowing
-  before anyone flips `Mfa.REQUIRED` thinking it's a one-liner.
-  `MfaCodeForm.svelte` only *responds* to a challenge for an
-  already-enrolled device; there is no enrolment flow in `web/` at all (no
-  `associateSoftwareToken`/`verifySoftwareToken`/`setUserMfaPreference`).
-  With TOTP as the only second factor, Cognito answers an un-enrolled
-  user's first sign-in with an `MFA_SETUP` challenge that `signIn` has no
-  callback for — so the flip would lock out every user, including the
-  operator. [todo.md](todo.md) has the enrolment steps needed to unblock it.
+- **No MFA, deliberately** (`Mfa.OFF`, decided 2026-08-25) — not deferred,
+  not blocked, a considered choice not to build it. The vault's real
+  second factor is the Master Password itself, which a lost or stolen
+  phone still doesn't have — Cognito-level MFA would add login friction on
+  every use without closing a gap that matters here.
 - **Threat protection is on** (Cognito **Plus** tier,
   `standardThreatProtectionMode: FULL_FUNCTION`): compromised-credential
   detection checks the *login* password against known-breach corpora, and
@@ -316,8 +309,8 @@ becomes an observed problem.
 - **Brute-force protection is Cognito's, and it is not configurable.**
   After 5 failed password attempts Cognito locks the user for `2^(n-5)`
   seconds, escalating to a ~15 minute cap, resetting on a successful
-  sign-in or 15 minutes of inactivity; the same escalation applies to
-  failed MFA codes. Worth knowing what this does *not* cover: it's
+  sign-in or 15 minutes of inactivity. Worth knowing what this does *not*
+  cover: it's
   per-user, not per-IP, so it blunts credential stuffing against one
   account but not one password sprayed across many. Also note **AWS WAF
   cannot be attached to an API Gateway HTTP API (v2) at all** — only REST
@@ -609,8 +602,8 @@ less than it appears; see [todo.md](todo.md).
 `SmallstashStack` (`infra/src/main/java/andriy/prybaten/infra/`) defines,
 as code, every AWS resource this project needs:
 
-- Cognito User Pool — SRP-only client, optional TOTP MFA, strong password
-  policy. Self-signup is enabled but **gated by a PreSignUp Lambda trigger
+- Cognito User Pool — SRP-only client, no MFA (deliberate, see §5), strong
+  password policy. Self-signup is enabled but **gated by a PreSignUp Lambda trigger
   checking an invite code** (§5) — *pending deploy*. Also *pending deploy*:
   **Plus tier + threat protection**, `preventUserExistenceErrors`, and a
   7-day refresh token.

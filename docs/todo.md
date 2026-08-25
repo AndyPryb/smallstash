@@ -435,31 +435,6 @@ to implement together as one pass:
       Doing it by hand was considered and deliberately postponed: the whole
       security-fix sequence lands first, then testing validates all of it in
       one pass rather than a manual click-through per phase.
-- [ ] 🚫 **Mandatory MFA (`Mfa.REQUIRED`) - BLOCKED, do not just flip it.**
-      Attempted in Phase 3 and deliberately not shipped. The earlier note
-      here ("UI already exists") was wrong and would have caused an
-      outage: `MfaCodeForm.svelte` only *responds* to a challenge for an
-      **already-enrolled** device. There is no enrolment flow anywhere in
-      `web/` - `grep` finds no `associateSoftwareToken`,
-      `verifySoftwareToken`, or `setUserMfaPreference`.
-      With TOTP as the only permitted second factor, Cognito answers the
-      first sign-in of an un-enrolled user with an `MFA_SETUP` challenge.
-      `cognito.js`'s `signIn` has no `mfaSetup` callback, so that promise
-      never resolves. **Every user, including you, would be locked out** -
-      strictly worse than optional MFA.
-      To unblock, build enrolment first:
-      1. `cognitoUser.associateSoftwareToken()` -> returns the shared
-         secret.
-      2. Show it as text plus an `otpauth://` URI (a QR renderer is nicer
-         but is another dependency - decide which).
-      3. `cognitoUser.verifySoftwareToken(code, deviceName)`.
-      4. `cognitoUser.setUserMfaPreference(null, {Enabled: true,
-         PreferredMfa: true})`.
-      5. Handle the `mfaSetup` callback in `signIn` so an un-enrolled user
-         is routed into that flow instead of hanging.
-      Then flip `Mfa.REQUIRED` - and verify it with a real account before
-      trusting it, since a mistake here is a lockout rather than a
-      degraded experience.
 - [x] **`preventUserExistenceErrors: true`** on the user pool client
       (implemented 2026-08-24, **not deployed**) - closes the
       confirmed-live user-enumeration gap (unauthenticated
@@ -548,9 +523,9 @@ re-researched later:
 - **Cognito already does per-user lockout, automatically and for free.**
   After 5 failed password attempts it locks the user for `2^(n-5)` seconds
   (n = cumulative failures), escalating to a ~15 minute cap. Resets on a
-  successful sign-in, or after 15 minutes with no attempts. Same escalation
-  applies to failed MFA code attempts. **It is not configurable** - "make it
-  10 attempts" isn't a setting that exists. It's also per-user, not per-IP,
+  successful sign-in, or after 15 minutes with no attempts. **It is not
+  configurable** - "make it 10 attempts" isn't a setting that exists. It's
+  also per-user, not per-IP,
   so it blunts credential-stuffing against one account but not spraying one
   password across many accounts.
 - **AWS WAF rate-based rules can't express "10 failures".** They count
@@ -571,8 +546,9 @@ re-researched later:
   -credential detection (the login password checked against known-breach
   corpora - directly the "retrying a compromised passwords database"
   scenario) plus risk-based adaptive auth that scores IP reputation and
-  device signals and can block or force step-up MFA. ~$0.40/month at 20
-  users.
+  device signals and can block outright on high risk (no step-up MFA to
+  fall back to instead - this app deliberately runs `Mfa.OFF`, see
+  architecture.md §5). ~$0.40/month at 20 users.
 - **fail2ban / CrowdSec / endlessh-go: none apply.** All three assume a
   long-lived host you control. fail2ban tails log files and writes
   iptables/nftables rules - there is no host and no firewall in a
@@ -701,9 +677,8 @@ re-researched later:
       refresh token stays usable; any use inside it slides it forward, so
       normal users rarely re-authenticate.
 
-Not done in Phase 3, with reasons: mandatory MFA (blocked on the missing
-TOTP enrolment flow - see above), and the AWS Budgets Action "blunt kill
-switch" (see below).
+Not done in Phase 3: the AWS Budgets Action "blunt kill switch" (see
+below).
 
 - [x] **AWS Budgets Action kill switch** (implemented 2026-08-24, **not
       deployed**). Automatic *containment*, where the CloudWatch alarm above
@@ -1124,19 +1099,6 @@ cache/session layering described in the ADR.
       clean; **not yet manually run through in a browser** (in particular,
       `navigator.clipboard.writeText` behavior across browsers/contexts is
       worth checking by hand).
-- [x] **MFA UI** (2026-08-23) - `web/src/lib/components/MfaCodeForm.svelte` +
-      `App.svelte`. `session.js`'s `signInAndUnlock()` now catches
-      `MfaRequiredError` and stashes everything needed to resume the same
-      login attempt (the mid-flow `CognitoUser`, plus the already-entered
-      email and Master Password - `pendingMfa`, module-private) rather than
-      making the user re-enter passwords just to supply a code.
-      `completeMfaLogin(code)` finishes it; a wrong code leaves `pendingMfa`
-      intact so the user can just retry, only falling back to the login
-      form if something *after* a correct code fails (e.g. wrong Master
-      Password). Not tested against a real MFA-enrolled account (none
-      exists on the live pool yet - would need enrolling one by hand first)
-      - build/tests verified clean, but **the actual Cognito MFA
-      challenge/response round trip is unverified against a live pool.**
 - [x] **Inactivity timeout** (2026-08-23) - `session.js` gained a
       15-minute (`DEFAULT_INACTIVITY_TIMEOUT_MS`) auto-lock timer:
       `resetInactivityTimer()` (no-ops if there's no active session, so it's
@@ -1388,9 +1350,8 @@ one place allowed to hold the live Vault Key) had zero coverage.
       (`auth/cognito.js`, `api/client.js`, `config.js` - the last of which
       would otherwise throw trying to read `import.meta.env` outside a
       Vite context) are replaced via `node:test`'s built-in `mock.module()`.
-      Covers sign-in (happy path, wrong Master Password, MFA-required),
-      MFA completion (happy path, wrong-code-is-retryable, no-pending-login
-      guard), offline unlock (happy path, never-cached guard, wrong
+      Covers sign-in (happy path, wrong Master Password),
+      offline unlock (happy path, never-cached guard, wrong
       password), signup/`initializeVault`, `saveVault` (happy path, no
       session, offline guard), `changeMasterPassword` (happy path
       confirmed by actually re-unlocking under the new password, no
@@ -1473,10 +1434,11 @@ chosen vehicle.
       `!! FLIP TO ENFORCING !!` comment there) and redeploy.
 - [ ] **The features that have never been run in a real browser.** Per
       CLAUDE.md, most of the UI is verified only by unit test + build:
-      MFA, offline unlock (Playwright's `context.setOffline(true)` makes
-      this genuinely testable), the 15-minute inactivity auto-lock,
-      change-Master-Password, the password generator's clipboard behaviour,
-      and the 409 conflict on a stale `PUT /keys`.
+      offline unlock (Playwright's `context.setOffline(true)` makes this
+      genuinely testable - and already found a real bug, see above), the
+      15-minute inactivity auto-lock, change-Master-Password, the password
+      generator's clipboard behaviour, and the 409 conflict on a stale
+      `PUT /keys`.
 - [ ] **Password reset** (`ForgotPasswordForm.svelte`) - same shape as
       registration above, needs an emailed code, human in the loop again.
 - [ ] **The `null`-in-error-message bug** reported 2026-08-25 ("Change
@@ -1531,8 +1493,8 @@ chosen vehicle.
       Highest-value components to cover first, whichever tool is picked:
       `EntryListItem.svelte` (view/edit/delete/mask-toggle state machine,
       the most complex UI logic in the app) and `App.svelte`'s auth-mode
-      routing (login/signup/MFA/offline branches - currently only
-      exercised by hand).
+      routing (login/signup/offline branches - currently only exercised by
+      hand).
 
 ## PWA hosting - CDK constructs written, not yet deployed (2026-08-24)
 
