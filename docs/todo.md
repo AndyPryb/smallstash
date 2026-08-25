@@ -647,22 +647,40 @@ Not done in Phase 3, with reasons: mandatory MFA (blocked on the missing
 TOTP enrolment flow - see above), and the AWS Budgets Action "blunt kill
 switch" (see below).
 
-- [ ] **AWS Budgets Action kill switch - decided, still unimplemented.**
-      The design is settled (see the Phase 3 decision earlier in this file):
-      an IAM Deny on `s3:*`/`dynamodb:*` attached to the **Lambda execution
-      role** - not `smallstash-deployer`, which is never in the live request
-      path - leaving root and the deployer untouched so investigation and
-      rollback stay possible. Deliberately deferred rather than rushed,
-      because it needs three pieces that each want care: a `ManagedPolicy`
-      holding the Deny, an execution role that `budgets.amazonaws.com` can
-      assume with `iam:AttachRolePolicy` on the Lambda role, and a
-      `CfnBudgetsAction` referencing an **existing budget by name** ("My
-      Monthly Cost Budget", created outside CDK) - a name-coupling that
-      breaks the deploy if the budget is ever renamed. Also worth deciding
-      the threshold deliberately: at $15 it only ever fires when something
-      is badly wrong, which is the intent. With the CloudWatch alarm above
-      now in place, the fast-detection half of this is already covered, so
-      the remaining value is purely automatic containment.
+- [x] **AWS Budgets Action kill switch** (implemented 2026-08-24, **not
+      deployed**). Automatic *containment*, where the CloudWatch alarm above
+      is detection. On breach, AWS Budgets attaches a Deny
+      (`s3:*`/`dynamodb:*`) to the **backend Lambda's execution role** and
+      every vault read/write starts failing - a full outage, deliberately,
+      on the reasoning that for a personal app an unexplained bill is worse
+      than downtime. Root and `smallstash-deployer` are untouched (neither
+      is in the live request path), so investigation and recovery are
+      unaffected; **recovery is detaching the policy, no redeploy needed**.
+      **The budget is created by CDK** (`smallstash-app`, $10/month) rather
+      than referencing a console-made one. A `CfnBudgetsAction` must name its
+      budget, and pointing at a hand-made budget would silently break every
+      future deploy the moment it was renamed. Personal budgets stay
+      completely independent of this one.
+      Design details worth not re-deriving: `ACTUAL` not `FORECASTED` (a
+      forecast can spike early in the month off very little real spend, and
+      this action is destructive); `AUTOMATIC` approval (`MANUAL` would just
+      be another email needing a human, which the alarm already covers);
+      threshold `ABSOLUTE_VALUE` $10, well above the ~$0.40/month floor.
+      IAM is scoped tighter than AWS's own example, which grants
+      attach/detach on `*` for users, groups **and** roles: this execution
+      role may attach only *that* policy (`iam:PolicyARN` condition) to only
+      *that* role (resource-scoped), and its trust policy carries AWS's
+      documented `aws:SourceArn`/`aws:SourceAccount` confused-deputy
+      conditions. Permissions verified against AWS's "Allow AWS Budgets to
+      apply IAM policies and SCPs" example, not assumed.
+      Requires `SMALLSTASH_ALERT_EMAIL` - a budget action must have at least
+      one subscriber, and a containment control that fires with nobody
+      informed turns an outage into a mystery. The whole thing is skipped if
+      that's unset.
+      ⚠️ **Possible first-deploy failure**: this is the first thing in the
+      stack needing `budgets:*` and IAM role/policy *creation* rights. If
+      `smallstash-deployer`'s policy is too narrow, the deploy fails here -
+      that's a deployer-permissions problem, not a broken stack.
 
 ## Full teardown capability - now always DESTROY (2026-08-24)
 
