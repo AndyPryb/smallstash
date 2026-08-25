@@ -295,24 +295,30 @@ to implement together as one pass:
       `PreSignUp_AdminCreateUser` is deliberately let through untouched so
       `admin-create-user` still works as a manual fallback (it can't send
       `validationData`, and already requires IAM credentials).
-- [ ] **RemovalPolicy.RETAIN + deletion protection** on the vault bucket,
-      users table, and Cognito pool - **implemented then deliberately
-      reverted on 2026-08-24, still owed.** RETAIN makes the frequent
-      pre-production destroy/recreate loop painful (a retained
-      `smallstash-users` breaks the *next* deploy outright, since the table
-      name is fixed), and no real secrets are stored yet, so DESTROY stays
-      for now. **This is the single most important item to flip before the
-      first real secret is stored.** What to change, all in
-      `SmallstashStack.java` and each marked with an inline comment there:
-      `dataRemovalPolicy` -> `RemovalPolicy.RETAIN`, drop
-      `.autoDeleteObjects(true)` from `VaultBucket` (it provisions a custom
-      resource whose whole job is emptying the bucket on stack delete - it
-      would defeat RETAIN, and it's only there now because a versioned
-      bucket can't be deleted while versions remain), and add
-      `.deletionProtection(true)` to both the table and the user pool.
-      `SiteBucket` stays DESTROY/auto-delete either way - disposable build
-      output, not user data. (Verified both directions synth correctly
-      before reverting.)
+- [x] **`RemovalPolicy.RETAIN` - evaluated and rejected, not planned
+      (decided 2026-08-25).** Was implemented then reverted 2026-08-24 as a
+      "temporarily reverted, flip before real secrets" item; re-evaluated
+      and dropped from the plan entirely rather than deferred. RETAIN
+      leaves resources orphaned-not-deleted on `cdk destroy`, and bringing
+      them back under stack management afterward is real work: S3 buckets
+      and DynamoDB tables support CloudFormation resource import
+      (`cdk import`), but **Cognito User Pools do not** - a known,
+      longstanding AWS gap
+      ([tracking issue](https://github.com/aws-cloudformation/cloudformation-coverage-roadmap/issues/1485)),
+      confirmed via AWS's own docs rather than assumed. So RETAIN wouldn't
+      have delivered full recovery even if used correctly - a retained
+      pool just sits there, unusable, forever.
+      **Accepted risk, decided explicitly**: `dataRemovalPolicy` stays
+      `DESTROY` permanently. Once real secrets are stored, `cdk destroy` -
+      accidental or deliberate - permanently deletes every vault, with no
+      recovery path. `SmallstashStack.java`'s comment above
+      `dataRemovalPolicy` carries this reasoning inline so it isn't
+      re-litigated from a stale "still owed" framing later.
+      **If this risk tolerance ever changes**: `deletionProtection(true)`
+      on the table and the pool (both support it natively) is the
+      lighter-weight guard to reach for, not RETAIN - it blocks the delete
+      outright rather than leaving an orphan to untangle afterward. Not
+      implemented; flagged as the fallback option, not a plan.
 - [x] **S3 lifecycle rule** on the vault bucket (implemented 2026-08-24,
       **not deployed**): `NoncurrentVersionExpiration` 90 days with
       `NewerNoncurrentVersions: 3`, plus
@@ -463,10 +469,11 @@ to implement together as one pass:
 
 ### Phase 0 deploy notes (read before the next `cdk deploy`)
 
-- **`cdk destroy` still works as before** - RETAIN was reverted (see above),
-  so the destroy/recreate loop is unchanged. This is *only* true while
-  there are no real secrets; flipping to RETAIN is the gate on storing
-  them.
+- **`cdk destroy` still works as before** - `DESTROY` is the permanent
+  decision (see above), so the destroy/recreate loop is unchanged. This
+  also means real secrets are stored at the accepted risk that a `cdk
+  destroy` deletes them permanently, with no recovery - not gated on any
+  planned future change.
 - **`SMALLSTASH_INVITE_CODE` must be set in `.env` first.** It's currently
   blank - deliberately, secrets don't get written by an AI session. `cdk
   deploy` fails fast at synth with an explanatory error until it's filled
@@ -775,7 +782,7 @@ the next `cdk deploy`, refresh both from:
 `SMALLSTASH_INVITE_CODE` and `SMALLSTASH_ALERT_EMAIL` in `.env` are *not*
 stack-derived and stay valid across recreates.
 
-## Full teardown capability - now always DESTROY (2026-08-24)
+## Full teardown capability - always DESTROY, permanently (2026-08-24, decision finalized 2026-08-25)
 
 `SmallstashStack.java` used to read a `destroyData` CDK context flag to
 decide the `RemovalPolicy` on the 3 data-bearing resources (S3 vault
@@ -791,12 +798,15 @@ file's history/git log if needed).
 Verified with a local synth that `DeletionPolicy: Delete` is now baked
 into all three resources unconditionally, not just assumed from the code.
 
-- [ ] **Reintroduce a RETAIN safety net before real, non-test data ever
-      lands here.** Either hardcode `RemovalPolicy.RETAIN` back, or restore
-      the old context-flag pattern (`destroyData` defaulting to `RETAIN`,
-      opt-in `DESTROY`) if occasional full-teardown convenience is still
-      wanted alongside the safety net. Nothing currently forces this switch
-      to happen - it's a manual code change before the first real signup.
+- [x] **Closed, not deferred (2026-08-25): no RETAIN safety net planned.**
+      Re-evaluated (see the security-review section above for the full
+      reasoning - Cognito User Pools can't be re-imported into
+      CloudFormation at all, so RETAIN wouldn't have delivered full
+      recovery anyway) and the answer is DESTROY stays permanently, real
+      secrets included, as an accepted risk rather than a gated one. The
+      lighter-weight `deletionProtection(true)` fallback (table + pool
+      only, not RETAIN) remains available if this tolerance changes, but
+      is not itself planned.
 
 ## What's built
 
@@ -1526,9 +1536,11 @@ chosen vehicle.
 
 `SmallstashStack` now defines the full S3 + CloudFront hosting path for
 `web/dist/`: a private `SiteBucket` (`BLOCK_ALL`, DESTROY/auto-delete since
-it's disposable build output, not user data - deliberately separate from
-`VaultBucket`'s RETAIN policy), a `SiteDistribution` (CloudFront) reaching it
-via Origin Access Control (no public bucket policy), `index.html` as both
+it's disposable build output, not user data - notably always DESTROY
+regardless of whatever `dataRemovalPolicy` governing `VaultBucket` is set
+to, see the security-review section above), a `SiteDistribution`
+(CloudFront) reaching it via Origin Access Control (no public bucket
+policy), `index.html` as both
 default root object and the 403/404 error-response fallback (so client-side
 routing survives a refresh), and a `BucketDeployment` that uploads
 `web/dist/` and invalidates the cache on every `cdk deploy`. The HTTP API's

@@ -32,15 +32,22 @@ itself. Full design: [docs/architecture.md](docs/architecture.md).
   confirmation before running, **every time** — prior approval doesn't
   carry over to the next deploy or the next session. Read-only AWS CLI
   calls (`describe-*`, `get-*`, `list-*`) are fine without asking.
-- **No real secrets are stored yet, and one thing gates that.** All three
-  data resources are `RemovalPolicy.DESTROY` on purpose, so the
-  destroy/recreate loop stays cheap while this is pre-production. **Flip
-  them to `RETAIN` + deletion protection before the first real secret goes
-  in** — inline `!! MUST FLIP TO RETAIN !!` comments mark all three spots
-  in `SmallstashStack.java`. This matters more than it looks: the S3 vault
-  blob is versioned, but the DynamoDB `KEYS` item (the wrapped Vault Key)
-  is a single copy — lose it and every vault version becomes permanently
-  undecryptable.
+- **All three data resources are `RemovalPolicy.DESTROY`, permanently —
+  this is a standing decision (2026-08-25), not a pre-production
+  placeholder.** RETAIN was evaluated and rejected: on `cdk destroy` it
+  leaves resources orphaned rather than deleted, and getting them back
+  under stack management is its own project — S3/DynamoDB support
+  CloudFormation resource import, Cognito User Pools do not (a known,
+  longstanding AWS gap), so RETAIN wouldn't even have delivered full
+  recovery. **Accepted risk, stated plainly**: once real secrets are
+  stored here, a `cdk destroy` — accidental or deliberate — permanently
+  deletes every vault, no recovery path. The DynamoDB `KEYS` item (the
+  wrapped Vault Key) is the sharper edge of that: it's a single copy, so
+  losing it makes every S3 vault version permanently undecryptable even
+  though S3 itself is versioned. If this risk tolerance ever changes,
+  `deletionProtection(true)` on the table and pool is the lighter-weight
+  guard to reach for — blocks the delete outright, no orphan-recovery
+  complexity — not RETAIN.
 - **`cdk` commands need `SMALLSTASH_INVITE_CODE` set in the gitignored
   repo-root `.env`.** Signup is invite-gated by a PreSignUp Lambda trigger,
   and the synth **hard-fails** without a code rather than deploying an
