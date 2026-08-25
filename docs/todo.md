@@ -1017,7 +1017,35 @@ this project's own DynamoDB table + S3 bucket), the realistic "AWS
 account hijacked for crypto-mining" risk is reasonably well bounded for
 a personal project at this scale.
 
-## PWA: offline access to key material - resolved 2026-08-23
+## PWA: offline access to key material - unlock logic done, feature broken end-to-end (updated 2026-08-25)
+
+🔴 **CONFIRMED BROKEN (2026-08-25), found by the first real-browser test of
+this flow.** The line below saying "resolved 2026-08-23" was true only of
+the unlock *logic* (`session.js`/`cache/db.js`), verified by unit test at
+the time - `web/e2e/offline-unlock.spec.js` (`test.fail()`-annotated so the
+suite stays meaningfully red/green) is the first time this ran end-to-end
+in a real offline browser, and it fails before ever reaching the
+offline-unlock code path at all.
+
+**Root cause, confirmed by reading the code, not guessed from the
+symptom**: `vite.config.js`'s service-worker precache glob is
+`['**/*.{js,css,html,svg,woff2}']` - `.json` is never in it, and there's no
+`runtimeCaching` rule for `/config.json` either. `config.js`'s
+`fetch('/config.json')` therefore always goes straight to the network with
+zero offline fallback. Going offline and reloading shows the app's own
+"Small Stash failed to load its configuration. Please try refreshing the
+page." error (screenshot captured during the test run) - the app can't
+finish booting offline, so `App.svelte` never even reaches the
+`showOffline`/`OfflineUnlockForm` branch this feature depends on.
+
+- [ ] **Fix**: add a `runtimeCaching` entry for `/config.json` (Workbox
+      `NetworkFirst` strategy - try the network first so an online session
+      always gets the current config, fall back to the cached response
+      when the network fails). Not yet implemented - needs a decision on
+      exact cache name/expiration, flagged rather than changed
+      unprompted mid test-writing session.
+- [ ] Re-run `web/e2e/offline-unlock.spec.js` after the fix and remove its
+      `test.fail()` annotation once it passes for real.
 
 **Status: implemented.** `web/src/lib/cache/db.js` caches salt, KDF params,
 and both wrapped Vault Key copies in IndexedDB alongside the vault
