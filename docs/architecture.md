@@ -572,12 +572,27 @@ Backend v1 storage + auth-scaffolding slice is built (this session):
 - **Not built yet:** whether the `keys` write at signup should move to a
   Cognito post-confirmation trigger rather than an explicit client call.
 
-### 9b. Infra (`infra/` — CDK, Java) — deployed 2026-08-23; unreleased changes pending
+### 9b. Infra (`infra/` — CDK, Java) — defined and proven, currently NOT deployed
 
-Deployed and live, but **the repo is ahead of the deployed stack**: the
-Phase 0+1 security work (2026-08-24) is committed and synth-verified but
-has never been `cdk deploy`'d. Anything marked "pending deploy" below
-exists only in code.
+**Nothing is running right now.** `SmallstashStack` is `DELETE_COMPLETE`
+as of 2026-08-24 — a deliberate teardown between pre-production
+iterations, which is the whole point of the DESTROY removal policy (§9b's
+gotchas below). The stack *was* live on 2026-08-23 and the design is
+proven end-to-end against real AWS, so "not deployed" here means "torn
+down on purpose", not "never worked".
+
+Everything marked *pending deploy* below therefore exists only in code —
+as does the entire security review (Phases 0–3), which has never been
+deployed at all.
+
+**How deploys authorize** (checked 2026-08-24, because reasoning from
+`smallstash-deployer`'s own policy gives the wrong answer): the CLI
+assumes `cdk-hnb659fds-deploy-role-…` and CloudFormation executes the
+changeset as `cdk-hnb659fds-cfn-exec-role-…`, which holds
+**`AdministratorAccess`**. Resource creation is bounded by *that* role,
+not by the deployer user — so the user's scoped IAM policy doesn't need to
+match CDK's generated resource names. It also means that scoping protects
+less than it appears; see [todo.md](todo.md).
 
 `SmallstashStack` (`infra/src/main/java/andriy/prybaten/infra/`) defines,
 as code, every AWS resource this project needs:

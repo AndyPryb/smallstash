@@ -86,21 +86,21 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 - Backend (`vault`, `keys`, `security`, `error`, `config` packages):
   written, compiles clean, LocalStack integration tests written but not
   yet run end-to-end here (needs Docker, unavailable in this sandbox).
-- Infra (`infra/`): **deployed and live** (2026-08-23) — Cognito, DynamoDB,
-  S3, Lambda, HTTP API + JWT authorizer, throttling, CORS all exist in
-  account `<aws-account-id>`, region `eu-west-1`. JWT enforcement verified
-  against the live API (unauthenticated request → 401), not just the
-  code. Live stack outputs (API URL, pool ID, bucket name) are in
-  [docs/todo.md](docs/todo.md). Redeploying: `cd infra && cdk deploy` —
-  the backend jar rebuilds automatically first, no manual `mvn package`
-  needed (`cdk.json`'s app command does it).
-- ⚠️ **The repo is ahead of the deployed stack.** The Phase 0+1 security
-  work (2026-08-24, commit `725a7e0`) is committed and synth-verified but
-  **never deployed** — invite-gated signup, 512 KiB vault cap, S3 lifecycle
-  rule, DynamoDB PITR, reserved concurrency, conditional `PUT /keys`, log
-  retention + API access logging. Don't assume the live stack has any of
-  it. Same for the `javascript:` URL XSS fix (`45ccec5`), which needs a
-  frontend redeploy.
+- Infra (`infra/`): **currently NOT deployed.** `SmallstashStack` is
+  `DELETE_COMPLETE` (verified 2026-08-24) — deliberately torn down between
+  pre-production iterations, which is what the DESTROY removal policy is
+  for. It *was* live 2026-08-23 and the design is proven (JWT enforcement
+  verified against the real API, unauthenticated → 401), but nothing runs
+  right now. ⚠️ **Every "live stack output" in
+  [docs/todo.md](docs/todo.md) and in `.env` is dead** — pool id, client
+  id, API URL, bucket names all vanished with the stack. Refresh them from
+  `aws cloudformation describe-stacks` after the next deploy; stale `.env`
+  values have already caused one confusing "you're offline" incident.
+- Redeploying: `cd infra && cdk deploy` — the backend jar rebuilds
+  automatically first (`cdk.json`'s app command), but **`npm run build` in
+  `web/` is still manual** and CDK uploads whatever `web/dist` holds.
+- ⚠️ **The whole security review is committed but has never been
+  deployed** — every phase below exists only in the repo.
 - PWA client (`web/`): **built and deployed**, see
   [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA on
   S3 + CloudFront (OAC-fronted); login (Cognito SRP), signup, vault CRUD,
