@@ -404,20 +404,117 @@ corner, where a user legitimately wants to place their text caret.
       only really shows up on real touch hardware. If 32px still isn't
       comfortable to grab, size it up.
 
-## Export secrets feature (2026-08-24)
+## Export secrets feature - implemented 2026-08-26 (uncommitted)
 
-Idea: let a user export their vault entries (e.g. to a file) - raised in
-conversation only, not scoped yet.
+Every open question below is now settled: **plaintext CSV**, gated behind an
+explicit acknowledgement, all core fields, entirely client-side.
 
-- [ ] **Design and implement a vault export feature.** Open questions to
-      settle first: export format (plain JSON? CSV? an encrypted file the
-      user could re-import elsewhere?), whether the export is plaintext
-      once decrypted client-side (a real exposure point - the file leaving
-      the browser in cleartext is a deliberate hole in the zero-knowledge
-      model that needs the user to understand what they're doing, e.g. a
-      confirmation dialog), and what's in scope (all fields including
-      Notes/attachments if the document feature above ever lands, or just
-      the core fields).
+**Sequencing note**: export was deliberately built *before* file attachments,
+on the reasoning that (a) it needs no backend or infra change at all while
+attachments need both, (b) building it first means file-export later extends
+a working exporter rather than writing one under pressure, and above all
+(c) `RemovalPolicy.DESTROY` means there is no server-side recovery path, so a
+working export is the only backup this app can have - and it's wanted
+*before* the storage model changes under it, not after.
+
+**What was built:**
+
+- **`lib/export.js`** (pure, 18 tests): RFC 4180 CSV with CRLF endings,
+  quote-when-needed escaping, doubled inner quotes, and correct handling of
+  the case that actually bites - multi-line Notes, which must not split a
+  record. Emits a UTF-8 BOM, because Excel assumes the legacy system codepage
+  for a BOM-less CSV and mangles every non-ASCII character. Filename uses the
+  **local** date, not `toISOString()`, so an evening export in UTC+2 isn't
+  stamped tomorrow.
+- **`lib/saveFile.js`**: `showSaveFilePicker` when available, `<a download>`
+  otherwise, feature-detected rather than UA-sniffed. Dismissing the picker
+  rejects with `AbortError` and is treated as a **cancellation, not a
+  failure**. The writable is closed in a `finally`, so a mid-write error
+  can't leave a zero-byte file holding the name the user chose.
+- **`ExportPanel.svelte`**: opens from the toolbar via the existing
+  one-panel-at-a-time model. Warning styled as an *error* box rather than a
+  notice - this is the one action that removes every protection the rest of
+  the app provides - plus a "what gets exported" summary and a checkbox gate
+  (same pattern as the signup Recovery Key, for the same reason). Afterwards
+  it reminds the user the file is unprotected.
+
+**Decisions worth not re-litigating:**
+
+- **Formula injection is deliberately not mitigated.** A field starting `=`,
+  `+`, `-` or `@` can be evaluated by Excel/Sheets. The standard fix is to
+  prefix with an apostrophe - but that *changes the exported password*, and
+  silently returning a wrong password is a worse failure for a password
+  manager than a spreadsheet quirk. Values export verbatim; the panel says to
+  prefer a text editor. Same call Bitwarden and 1Password make.
+- **Artifacts are a list, not a single file**, even though there's exactly
+  one today. When attachments land an export becomes "a CSV plus N files" and
+  the writer switches to a directory picker or an archive - the seam exists
+  so that's additive.
+- **Mobile gets no destination picker, by decision.** `showSaveFilePicker` is
+  Chromium-desktop only - not Firefox, not Safari, and **not Chrome for
+  Android** ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/showSaveFilePicker),
+  [Chrome docs](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)).
+  Agreed behaviour: picker on desktop, straight to Downloads on Android. The
+  panel's copy changes to match which one the browser will actually do.
+
+**Verified** in a real browser, both paths: the download fallback (bytes read
+off the actual download, BOM present, quoting/unicode/multi-line notes byte-
+exact), the picker path against a stubbed API (content, `suggestedName`,
+stream closed), cancellation showing a notice and *no* error, a genuine
+failure still surfacing as an error, the acknowledgement gate, and Export
+closing when another panel opens. `npm test` **136/136** (118 + 18 new), warning-free build.
+
+**CSP checked, not assumed**: the `<a download href="blob:…">` fallback was
+run under the deployed policy injected as a meta tag - the download starts
+and produces **no `blob:` violation**, so `default-src 'self'` doesn't block
+it. (The `style-src-elem inline` reports seen during that run are Vite's
+dev-server style injection plus the harness's own `<style>`; the production
+build was re-confirmed to emit zero inline `<style>` and an external
+stylesheet.)
+
+### Mobile CSV viewer mojibake - diagnosed and half-fixed (2026-08-26)
+
+Reported after the first real use: on desktop the export is fine, but a
+mobile CSV app showed the header as `ï»¿title` and a password `haha-lolф` as
+`haha-lolÑ`. Same file on Windows was correct.
+
+**Diagnosis, confirmed by reproducing both symptoms byte-for-byte rather than
+inferred**: that app decodes the file as **Latin-1/Windows-1252** and ignores
+UTF-8 entirely.
+
+- `ï»¿` is exactly the UTF-8 BOM bytes `EF BB BF` read as Latin-1
+  (`EF`→`ï`, `BB`→`»`, `BF`→`¿`).
+- `ф` is UTF-8 `D1 84`; as Latin-1 that's `Ñ` plus an invisible control byte -
+  precisely the reported `Ñ`.
+
+**Fix: the BOM is now a checkbox** ("Add a compatibility marker for Microsoft
+Excel"), defaulting to *on* where a save picker exists (desktop) and *off*
+where it doesn't (mobile). A CSV carries no way to declare its own encoding -
+the `charset` in the MIME type is gone the moment the bytes are on disk - so
+Excel-on-Windows and BOM-unaware readers want genuinely opposite things and
+there is no single output that satisfies both. Hence a user-visible choice
+rather than a guess, with the copy describing the symptom (`ï»¿`) rather than
+the jargon.
+
+⚠️ **This only fixes half of it, and the limit is worth recording.** Verified
+explicitly: with the BOM off, the header reads `title` even in Latin-1 - but
+`ф` is *still* mangled to `Ñ`, because the app is not decoding UTF-8 at all.
+**Nothing this app can write to a `.csv` fixes that** short of refusing to
+export non-ASCII, which would be worse. The remedy is a reader that honours
+UTF-8 (Google Sheets, or a text editor that lets you pick the encoding). If
+this keeps biting, the real options are a JSON export (still no help against
+a hard-coded Latin-1 reader) or naming the file `.txt` to steer it toward a
+text editor - neither is obviously worth it for one viewer.
+
+- [ ] **Not verified**: a real save dialog on a real desktop browser (the
+      picker path was exercised against a stub, since headless can't show the
+      dialog), and a real Android download. **Also unverified: whether
+      turning the marker off actually makes that particular mobile app happy
+      about the header** - the byte-level behaviour is proven, the app's
+      reaction to it is not.
+- [ ] **Re-import is not built and not planned yet.** The export is one-way.
+      If it should ever round-trip, the CSV needs a decision about entry ids
+      (currently excluded - they're internal) and about merge-vs-replace.
 ## UI theming nod to the name's origin - done (2026-08-24)
 
 "smallStash" was inspired by the "Small Stash" storage item from the game
@@ -448,18 +545,48 @@ Idea: let a vault entry hold a document/file attachment (e.g. a scanned
 ID, a recovery-codes printout), not just text fields. Raised in
 conversation only - not scoped yet.
 
-- [ ] **Clarify requirements before implementing** - open questions to
-      settle first: what counts as a "document" (arbitrary file upload vs.
-      a constrained type like PDF/image?), size limits (affects S3 storage
-      cost and the whole-vault-blob model - see
-      [ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md), a large
-      attachment inside the single encrypted vault blob changes the
-      cost/perf tradeoffs that decision was based on), whether it's
-      encrypted inline as part of the existing vault ciphertext blob or
-      stored as a separate per-entry S3 object (zero-knowledge must hold
-      either way - client-side AES-256-GCM before it ever leaves the
-      browser, same as everything else), and UI/UX for upload/download/
-      preview.
+### Storage model - decided 2026-08-26: separate per-file S3 objects
+
+The inline-vs-separate question below is **settled**, and the existing size
+cap settles it rather than taste:
+
+- `VaultController.MAX_CIPHERTEXT_BYTES` caps the **whole vault** at 512 KiB,
+  and there is exactly one blob per user
+  (`users/<sub>/vault.json.enc`, see `S3VaultRepository`). A single phone
+  photo is 2-5 MB - several times the entire budget for everything the user
+  owns. Attachments **cannot** live inline in the vault blob.
+- So: **one encrypted S3 object per file**, at `users/<sub>/files/<fileId>`,
+  with only *metadata* (file id, original name, size, MIME type, and the
+  per-file key material) stored inside the vault JSON. Zero-knowledge holds
+  the same way it does today - client-side AES-256-GCM before the bytes ever
+  leave the browser; the backend stores opaque ciphertext and a name it
+  cannot read.
+- **The Lambda's IAM already fits this** without widening: it holds
+  `s3:GetObject`/`s3:PutObject` scoped to `<bucket>/users/*`, so
+  `users/<sub>/files/<id>` is already in scope. Verified against
+  `SmallstashStack.java`, not assumed.
+- ⚠️ **Deleting an attachment needs a real decision, not an assumption.**
+  There is deliberately **no `s3:DeleteObject`** on the execution role - it
+  was removed in the Phase 3 least-privilege work specifically so a
+  compromised Lambda cannot destroy the vault's version history. Adding it
+  back for attachments would undo part of that. Options to weigh when this is
+  built: grant `s3:DeleteObject` narrowed to `users/*/files/*` only (not the
+  vault blob), or don't delete at all - drop the metadata from the vault and
+  let an S3 lifecycle rule expire orphaned objects. The second keeps the
+  role's current shape and is probably right.
+- Per-file size cap and total-per-user quota still need choosing; the vault's
+  512 KiB cap says nothing about these, and they're the real cost-abuse
+  control for this feature.
+
+- [ ] **Remaining open questions before implementing**: what counts as a
+      "document" (arbitrary upload vs. a constrained type like PDF/image),
+      the per-file and per-user size limits noted above, the delete decision
+      above, and UI/UX for upload/download/preview. The storage shape itself
+      is no longer open - see above. Note
+      [ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md) reasoned about a
+      single whole-vault blob; per-file objects are an addition to that model,
+      not a reversal of it, and the ADR is worth a short amendment when this
+      lands.
 ## PWA build/deploy gotcha - fixed structurally (2026-08-24)
 
 Discovered live: registration on the deployed site failed with `User pool

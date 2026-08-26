@@ -7,6 +7,7 @@
   import EntryListItem from './EntryListItem.svelte';
   import ResizableTextarea from './ResizableTextarea.svelte';
   import Alert from './Alert.svelte';
+  import ExportPanel from './ExportPanel.svelte';
   import { moveItem, dropIndexFor } from '../reorder.js';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
@@ -54,11 +55,11 @@
    * unrepresentable instead of something each new toggle has to remember to
    * prevent.
    *
-   * @type {'master-password' | 'login-password' | null}
+   * @type {'master-password' | 'login-password' | 'export' | null}
    */
   let openPanel = $state(null);
 
-  /** @param {'master-password' | 'login-password'} panel */
+  /** @param {'master-password' | 'login-password' | 'export'} panel */
   function togglePanel(panel) {
     openPanel = openPanel === panel ? null : panel;
   }
@@ -328,6 +329,14 @@
       >
         Change Login Password
       </button>
+      <button
+        type="button"
+        class="compact"
+        aria-expanded={openPanel === 'export'}
+        onclick={() => togglePanel('export')}
+      >
+        Export
+      </button>
       <!-- Danger-outline rather than another neutral button: it's the one
            control here that ends the session, and with unsaved changes it
            can lose work (hence the confirm in handleSignOut). Outline, not
@@ -362,6 +371,13 @@
 
   {#if openPanel === 'login-password'}
     <ChangeLoginPasswordForm onclose={() => (openPanel = null)} />
+  {/if}
+
+  {#if openPanel === 'export'}
+    <!-- Exports whatever is on screen, including unsaved edits: the export
+         is of the vault the user is looking at, not of the last thing that
+         reached the server. -->
+    <ExportPanel {vaultDocument} onclose={() => (openPanel = null)} />
   {/if}
 
   <!-- Keyed by entry.id, which reordering depends on: it keeps each row's
