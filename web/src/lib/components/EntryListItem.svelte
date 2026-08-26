@@ -19,8 +19,54 @@
   import ResizableTextarea from './ResizableTextarea.svelte';
   import { normalizedUrl } from '../url.js';
 
-  /** @type {{ entry: { id: string, title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
-  let { entry, onremove, onupdate } = $props();
+  /**
+   * Reordering is owned by VaultView, not here - only it can see the whole
+   * list, and the drop target depends on every row's position. This
+   * component renders the handle and forwards the raw pointer events up.
+   *
+   * @type {{
+   *   entry: { id: string, title: string, username: string, password: string, url: string, notes: string },
+   *   onremove: () => void,
+   *   onupdate: (updated: object) => void,
+   *   index?: number,
+   *   total?: number,
+   *   dragging?: boolean,
+   *   onreorderstart?: (event: PointerEvent) => void,
+   *   onreordermove?: (event: PointerEvent) => void,
+   *   onreorderend?: (event: PointerEvent) => void,
+   *   onreordercancel?: () => void,
+   *   onreorderstep?: (delta: number) => void,
+   * }}
+   */
+  let {
+    entry,
+    onremove,
+    onupdate,
+    index = 0,
+    total = 1,
+    dragging = false,
+    onreorderstart = undefined,
+    onreordermove = undefined,
+    onreorderend = undefined,
+    onreordercancel = undefined,
+    onreorderstep = undefined,
+  } = $props();
+
+  /**
+   * Keyboard equivalent of the drag. A drag-only implementation is simply
+   * unusable without a pointer, so the handle is a real focusable button
+   * that moves the entry with the arrow keys - the same affordance,
+   * reachable by tab.
+   *
+   * @param {KeyboardEvent} event
+   */
+  function handleReorderKey(event) {
+    const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (delta === 0) return;
+    // Stops the page scrolling under the user mid-reorder.
+    event.preventDefault();
+    onreorderstep?.(delta);
+  }
 
   // How this entry is referred to in the accessible names of its own
   // controls. Matches what the summary row displays, so what a screen
@@ -106,8 +152,37 @@
   }
 </script>
 
-<li class:expanded={expanded || editing}>
+<li class:expanded={expanded || editing} class:dragging>
   <div class="summary">
+    <!-- A dedicated handle rather than dragging the whole row. The row is
+         already a button (tap to expand), so making it draggable too would
+         make every tap ambiguous - and on touch, a drag gesture on a
+         vertical list is indistinguishable from scrolling it. A handle
+         needs no long-press timer to disambiguate: grabbing it *is* the
+         disambiguation.
+         Hidden when there's nothing to reorder. -->
+    {#if total > 1}
+      <button
+        type="button"
+        class="drag-handle"
+        aria-label="Reorder {entryLabel}. Position {index + 1} of {total}. Press the up or down arrow key to move it."
+        disabled={editing}
+        onpointerdown={onreorderstart}
+        onpointermove={onreordermove}
+        onpointerup={onreorderend}
+        onpointercancel={onreordercancel}
+        onkeydown={handleReorderKey}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="6" cy="3.5" r="1.35" />
+          <circle cx="10" cy="3.5" r="1.35" />
+          <circle cx="6" cy="8" r="1.35" />
+          <circle cx="10" cy="8" r="1.35" />
+          <circle cx="6" cy="12.5" r="1.35" />
+          <circle cx="10" cy="12.5" r="1.35" />
+        </svg>
+      </button>
+    {/if}
     <button
       type="button"
       class="toggle"
@@ -241,6 +316,59 @@
   li.expanded {
     border-color: var(--ss-border-strong);
     box-shadow: var(--ss-shadow-1);
+  }
+
+  /* The row being dragged lifts further still and follows the accent, so
+     it's unmistakably the thing that will land when the pointer is
+     released. No transition on this one: the rows around it reflow
+     instantly as it passes them, and an animated lift would lag behind the
+     pointer it's supposed to be tracking. */
+  li.dragging {
+    border-color: var(--ss-accent);
+    box-shadow: var(--ss-shadow-2);
+    /* Lets the rows underneath show through just enough to see where it's
+       about to land. */
+    opacity: 0.9;
+    transition: none;
+  }
+
+  .drag-handle {
+    flex-shrink: 0;
+    width: var(--ss-control-height-sm);
+    min-height: var(--ss-control-height-sm);
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    color: var(--ss-text-faint);
+    cursor: grab;
+    /* Required for a pointer-driven drag on touch: without it the browser
+       claims the gesture for scrolling and never delivers pointermove.
+       Scoped to the handle alone, so the rest of the row still scrolls the
+       page normally. */
+    touch-action: none;
+  }
+
+  .drag-handle:hover:not(:disabled) {
+    background: var(--ss-surface-raised);
+    border-color: var(--ss-border);
+    color: var(--ss-text);
+  }
+
+  li.dragging .drag-handle {
+    color: var(--ss-accent);
+    cursor: grabbing;
+  }
+
+  /* The shared press-nudge would shift the handle out from under the
+     pointer at the moment the drag begins. */
+  .drag-handle:active:not(:disabled) {
+    transform: none;
+  }
+
+  .drag-handle svg {
+    width: 1rem;
+    height: 1rem;
+    fill: currentColor;
   }
 
   .summary {

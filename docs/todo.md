@@ -279,29 +279,72 @@ assumed:
 So this is entirely client-side: reorder the array, mark the vault dirty,
 and the existing "Save vault" writes the new order like any other edit.
 
-- [ ] **Implement drag-to-reorder in `VaultView`/`EntryListItem`.** Points
-      worth settling before writing it:
-      - **Pointer Events, not HTML5 drag-and-drop.** `dragstart`/`drop`
-        famously don't work on touch, and `ResizableTextarea.svelte` already
-        establishes the Pointer Events + `setPointerCapture` pattern in this
-        codebase for exactly that reason - reuse it rather than inventing a
-        second approach.
-      - **Long-press to start on touch**, because a plain drag gesture on a
-        vertical list is indistinguishable from scrolling it. Desktop can
-        start on press-and-move. (Note: the request mentioned *right*-click
-        for the mouse - worth confirming, since right-press-and-drag is a
-        very unusual binding and it also has to suppress the context menu.
-        Left press-and-hold, or an explicit drag handle, is the convention.)
-      - **A visible drag handle** is the accessible option and avoids
-        colliding with the existing tap-to-expand on the entry row. Whatever
-        is chosen, keyboard reordering needs an answer too - drag-only
-        reordering is unusable without a pointer, so this wants
-        `aria-grabbed`-style semantics or, more simply, move-up/move-down
-        controls as the accessible equivalent.
-      - Reordering must go through the same `vaultDocument.entries = [...]`
-        reassignment every other edit uses, so the `dirty` derivation and the
-        unsaved-changes guard pick it up automatically. An in-place
-        `splice` would silently not.
+- [x] **Implemented (2026-08-26), uncommitted.** Entirely client-side, as
+      predicted above - not one line of backend or infra changed.
+
+**How it works:**
+
+- **`lib/reorder.js`** holds the two pure functions: `moveItem` (splice-out /
+  splice-in, always returning a **new** array) and `dropIndexFor` (which row
+  index a pointer position implies). Kept out of the components because the
+  index arithmetic is the part that's easy to get subtly wrong - especially
+  moving an item *down* past its own vacated slot - and this way it's
+  testable without a DOM or a gesture. **15 new tests** (118 total).
+- **Pointer Events, not HTML5 drag-and-drop**, so it works on touch at all,
+  with `setPointerCapture` so a fast drag can't escape the handle - the same
+  pattern `ResizableTextarea.svelte` already uses.
+- **A dedicated drag handle, and no long-press timer.** The earlier note here
+  assumed dragging the whole row, which would need a long-press on touch to
+  be distinguishable from scrolling. A handle *is* that disambiguation, and
+  it also avoids colliding with the row's existing tap-to-expand. The handle
+  carries `touch-action: none` (without it the browser claims the gesture for
+  scrolling and never sends `pointermove`), scoped to the handle so the rest
+  of the row still scrolls normally.
+  **Deviation from the request worth flagging**: this is left press-and-drag,
+  not the right-click-and-hold that was asked for. Right-press-drag is a very
+  unusual binding and would have to suppress the context menu; a handle is
+  the convention and satisfies "hold and move" without either problem.
+- **Keyboard reordering** via arrow keys on the focused handle - drag-only
+  would be unusable without a pointer. Moves are announced through an
+  `aria-live` region, since reordering has no other confirmation.
+- **Escape cancels an in-progress drag** and restores the original order.
+- The list reorders **live** under the pointer rather than computing a final
+  position on release, so what you see is what will be committed. Order is
+  persisted by the ordinary "Save vault" - reordering goes through the same
+  `vaultDocument.entries = [...]` reassignment as every other edit, so
+  `dirty` and the unsaved-changes guards pick it up for free.
+- The handle is hidden entirely when there's only one entry.
+
+**Two real bugs found by driving it in a browser, not by inspection:**
+
+- ⚠️ **The whole list jumped ~48px the moment a drag started.** Reordering
+  makes the vault dirty → the "Unsaved changes" pill appeared → the sticky
+  toolbar wrapped to a second line → every row shifted down out from under
+  the pointer, and the drag couldn't reach further than one position. This
+  was **not only a drag bug**: the same jump happened on *any* first edit,
+  including typing into the add-entry form. Fixed at the cause - the pill is
+  now always rendered with its width reserved (`min-width`) and only its
+  *text* toggles, so the toolbar's height no longer depends on dirty state.
+  Keeping the text (rather than the element) conditional preserves the
+  `role="status"` announcement.
+- ⚠️ **Keyboard reordering only worked once.** The each block is keyed by
+  `entry.id`, so the row's DOM node survives a move - but *moving* a focused
+  element still blurs it, so every arrow press after the first went to
+  `<body>` and did nothing. Fixed by re-focusing the same node after `tick()`.
+
+**Verified** by driving the real component in headless Chromium: drag down,
+drag up, live preview mid-drag, Escape-cancels-and-restores, dirty state set
+on reorder and *not* set after a cancel, keyboard arrows in both directions
+including the no-op at the ends, focus surviving a keyboard move, the
+`aria-live` announcement text, a genuine **touch** drag via CDP
+`Input.dispatchTouchEvent` (which is what proves `touch-action: none` is
+right), and the handle disappearing at one entry. All pass; `npm test`
+118/118; warning-free build.
+
+- [ ] **Not verified on real touch hardware.** The touch path is synthesized
+      CDP events, which exercises the code but not a real finger on a real
+      phone - the same caveat as the Notes resize handle above. Worth
+      checking the handle is comfortably grabbable at 36px.
 
 ## UX pass - remaining, not started
 

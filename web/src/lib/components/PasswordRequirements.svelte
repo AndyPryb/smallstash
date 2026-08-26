@@ -145,18 +145,6 @@
     stroke-linejoin: round;
   }
 
-  /* Visually hidden but read aloud - the standard clip-rect pattern rather
-     than display:none, which would remove it from the accessibility tree
-     along with the visual layout. */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
+  /* `.sr-only` is a shared utility in src/app.css - it's needed by the
+     reorder announcement too, so it lives there rather than being copied. */
 </style>
