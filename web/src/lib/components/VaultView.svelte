@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { saveVault, isOfflineSession } from '../session.js';
   import ChangeMasterPasswordForm from './ChangeMasterPasswordForm.svelte';
   import ChangeLoginPasswordForm from './ChangeLoginPasswordForm.svelte';
@@ -7,6 +7,7 @@
   import EntryListItem from './EntryListItem.svelte';
   import ResizableTextarea from './ResizableTextarea.svelte';
   import Alert from './Alert.svelte';
+  import { moveItem, dropIndexFor } from '../reorder.js';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
@@ -104,6 +105,19 @@
     if (dirty) saved = false;
   });
 
+  // Escape abandons an in-progress drag and puts the order back, which is
+  // what every drag implementation people have used does. Only bound while
+  // a drag is actually active, so it can't swallow Escape anywhere else.
+  $effect(() => {
+    if (draggingId === null) return;
+    /** @param {KeyboardEvent} event */
+    const onKeydown = (event) => {
+      if (event.key === 'Escape') cancelReorder();
+    };
+    window.addEventListener('keydown', onKeydown);
+    return () => window.removeEventListener('keydown', onKeydown);
+  });
+
   function useGeneratedPassword(generated) {
     password = generated;
     showGenerator = false;
@@ -121,6 +135,123 @@
     title = username = password = url = notes = '';
     showGenerator = false;
     showNewPassword = false;
+  }
+
+  /* ---------------------------------------------------------------------
+   * Entry reordering.
+   *
+   * Lives here rather than in EntryListItem because the drop target depends
+   * on where every *other* row is; a single entry can't know that.
+   *
+   * Pointer Events, not HTML5 drag-and-drop: `dragstart`/`drop` don't fire
+   * on touch at all, which would make this desktop-only. Pointer capture on
+   * the handle means a fast drag that outruns the pointer can't "escape"
+   * mid-gesture - the same approach ResizableTextarea.svelte already uses
+   * for its resize grip.
+   *
+   * The array is reordered live as the pointer moves, rather than computing
+   * a final position on release, so the list under the pointer always shows
+   * exactly what will be committed. `orderBeforeDrag` is the undo for the
+   * cancel paths (Escape, or the browser cancelling the gesture).
+   * --------------------------------------------------------------------- */
+
+  /** @type {HTMLUListElement | undefined} */
+  let listEl;
+  /** @type {string | null} */
+  let draggingId = $state(null);
+  /** @type {object[] | null} */
+  let orderBeforeDrag = null;
+  // Reordering is a visual change with no visible confirmation of its own,
+  // so it's announced for screen readers - especially for the keyboard path,
+  // where there's no drag to feel.
+  let reorderAnnouncement = $state('');
+
+  /** @param {string} id */
+  function indexOfEntry(id) {
+    return vaultDocument.entries.findIndex((entry) => entry.id === id);
+  }
+
+  /** @param {number} index */
+  function announceMove(index) {
+    const entry = vaultDocument.entries[index];
+    if (!entry) return;
+    reorderAnnouncement = `${entry.title || '(untitled)'} moved to position ${index + 1} of ${vaultDocument.entries.length}.`;
+  }
+
+  /**
+   * @param {PointerEvent} event
+   * @param {string} id
+   */
+  function startReorder(event, id) {
+    // Ignore right/middle button presses - a context-menu click on the
+    // handle shouldn't begin a drag.
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    draggingId = id;
+    orderBeforeDrag = vaultDocument.entries.slice();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    // Suppresses the browser's own text-selection drag, which would
+    // otherwise select entry titles as the pointer sweeps the list.
+    event.preventDefault();
+  }
+
+  /** @param {PointerEvent} event */
+  function moveReorder(event) {
+    if (draggingId === null || !listEl) return;
+    const from = indexOfEntry(draggingId);
+    if (from === -1) return;
+
+    const rows = /** @type {HTMLElement[]} */ ([...listEl.children]);
+    const midpoints = rows.map((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+
+    const to = dropIndexFor(midpoints, from, event.clientY);
+    if (to !== from) {
+      // Reassignment, never an in-place splice - `dirty` is derived from
+      // this and would not notice a mutation.
+      vaultDocument.entries = moveItem(vaultDocument.entries, from, to);
+    }
+  }
+
+  function endReorder() {
+    if (draggingId === null) return;
+    const landedAt = indexOfEntry(draggingId);
+    const moved = orderBeforeDrag?.[landedAt]?.id !== draggingId;
+    if (moved && landedAt !== -1) announceMove(landedAt);
+    draggingId = null;
+    orderBeforeDrag = null;
+  }
+
+  function cancelReorder() {
+    if (draggingId === null) return;
+    if (orderBeforeDrag) vaultDocument.entries = orderBeforeDrag;
+    draggingId = null;
+    orderBeforeDrag = null;
+  }
+
+  /**
+   * Keyboard reordering, driven by the handle's arrow keys.
+   * @param {string} id
+   * @param {number} delta
+   */
+  async function stepReorder(id, delta) {
+    const from = indexOfEntry(id);
+    const to = from + delta;
+    if (from === -1 || to < 0 || to >= vaultDocument.entries.length) return;
+
+    // Keying the each block by entry.id keeps the moved row's DOM node
+    // alive, but *moving* a focused element in the DOM still blurs it - so
+    // without this, the first arrow press worked and every one after it went
+    // to <body> and did nothing. Re-focus the same node once Svelte has
+    // finished reordering, so the user can keep pressing the arrow key.
+    const handleEl = document.activeElement;
+
+    vaultDocument.entries = moveItem(vaultDocument.entries, from, to);
+    announceMove(to);
+
+    await tick();
+    if (handleEl instanceof HTMLElement) handleEl.focus();
   }
 
   function removeEntry(id) {
@@ -170,9 +301,15 @@
       <button type="button" class="primary" onclick={persist} disabled={saving}>
         {saving ? 'Saving…' : 'Save vault'}
       </button>
-      {#if dirty}
-        <span class="dirty-indicator" role="status">Unsaved changes</span>
-      {/if}
+      <!-- Always rendered, with its width reserved, so the toolbar's height
+           never depends on whether the vault is dirty. It used to appear and
+           disappear, which made the sticky toolbar wrap to a second line the
+           instant anything was edited and shifted the whole list down ~48px.
+           Merely ugly while typing; actively broken while dragging an entry,
+           because the rows jump out from under the pointer mid-gesture.
+           The text (not the element) is what toggles, so role="status" still
+           announces "Unsaved changes" when it becomes true. -->
+      <span class="dirty-indicator" class:visible={dirty} role="status">{dirty ? 'Unsaved changes' : ''}</span>
     </div>
     <div class="toolbar-actions">
       <button
@@ -227,13 +364,41 @@
     <ChangeLoginPasswordForm onclose={() => (openPanel = null)} />
   {/if}
 
-  <ul class="entries">
-    {#each vaultDocument.entries as entry (entry.id)}
-      <EntryListItem {entry} onremove={() => removeEntry(entry.id)} onupdate={(updated) => updateEntry(entry.id, updated)} />
+  <!-- Keyed by entry.id, which reordering depends on: it keeps each row's
+       DOM node (and the focus inside it) attached to the same entry as
+       positions change. Index-keying would rebuild rows in place and drop
+       focus on every keyboard move. -->
+  <ul class="entries" bind:this={listEl}>
+    {#each vaultDocument.entries as entry, index (entry.id)}
+      <EntryListItem
+        {entry}
+        {index}
+        total={vaultDocument.entries.length}
+        dragging={draggingId === entry.id}
+        onreorderstart={(event) => startReorder(event, entry.id)}
+        onreordermove={moveReorder}
+        onreorderend={endReorder}
+        onreordercancel={cancelReorder}
+        onreorderstep={(delta) => stepReorder(entry.id, delta)}
+        onremove={() => removeEntry(entry.id)}
+        onupdate={(updated) => updateEntry(entry.id, updated)}
+      />
     {:else}
       <li class="empty">No entries yet.</li>
     {/each}
   </ul>
+
+  {#if vaultDocument.entries.length > 1}
+    <p class="hint reorder-hint">
+      Drag an entry by its handle to reorder the list, or focus a handle and use the arrow keys. Like any other change,
+      the new order is only stored once you press Save vault.
+    </p>
+  {/if}
+
+  <!-- Reordering has no visible confirmation of its own; this gives the
+       keyboard path (and screen readers generally) the same feedback the
+       drag gives visually. -->
+  <p class="sr-only" role="status" aria-live="polite">{reorderAnnouncement}</p>
 
   <form class="add-entry" onsubmit={addEntry}>
     <h2>Add entry</h2>
@@ -316,16 +481,25 @@
   }
 
   /* A status pill rather than bare amber text - "Unsaved changes" is a
-     state, and reads as one next to the button that clears it. */
+     state, and reads as one next to the button that clears it.
+     `min-width` reserves the slot whether or not it currently has text, so
+     the toolbar can't change height when the vault becomes dirty - see the
+     comment on the element for why that mattered enough to fix. */
   .dirty-indicator {
+    min-width: 8.75rem;
     padding: var(--ss-space-1) var(--ss-space-3);
-    background: var(--ss-warn-surface);
-    border: 1px solid var(--ss-warn-border);
+    border: 1px solid transparent;
     border-radius: var(--ss-radius-pill);
-    color: var(--ss-warn-text);
     font-size: var(--ss-text-xs);
     font-weight: 500;
+    text-align: center;
     white-space: nowrap;
+  }
+
+  .dirty-indicator.visible {
+    background: var(--ss-warn-surface);
+    border-color: var(--ss-warn-border);
+    color: var(--ss-warn-text);
   }
 
   /* Entries are cards in a stack, not rows separated by hairlines - each
@@ -348,6 +522,12 @@
     border-radius: var(--ss-radius-lg);
     color: var(--ss-text-muted);
     text-align: center;
+  }
+
+  /* Sits directly under the list it describes, and only appears once there
+     is more than one entry to reorder. */
+  .reorder-hint {
+    margin-top: calc(-1 * var(--ss-space-2));
   }
 
   .add-entry {
