@@ -167,8 +167,8 @@
 </script>
 
 <main>
-  <header>
-    <h1>
+  <header class="app-bar">
+    <h1 class="brand">
       <!-- Small nod to the name's origin: Rust's "Small Stash" item, a
            buried pouch you dig up to retrieve your loot - see
            docs/todo.md "UI theming nod to the name's origin". Purely
@@ -205,106 +205,132 @@
 
   {#if vaultDocument}
     <VaultView bind:vaultDocument onsignout={handleSignOut} />
-  {:else if showOffline}
-    <OfflineUnlockForm
-      email={lastAccount.email}
-      onunlock={handleOfflineUnlock}
-      ononline={() => (forceOffline = false)}
-      {loading}
-    />
-  {:else if !online}
-    <p class="error" role="alert">
-      You're offline, and this device has never signed in to Small Stash before - connect to the internet to sign in
-      for the first time.
-    </p>
-  {:else if authMode === 'signup'}
-    <SignupForm oncomplete={handleSignupComplete} oncancel={() => switchAuthMode('login')} />
-  {:else if authMode === 'forgot-password'}
-    <ForgotPasswordForm oncomplete={handlePasswordResetComplete} oncancel={() => switchAuthMode('login')} />
   {:else}
-    <LoginForm onlogin={handleLogin} {loading} />
-    <p class="switch-mode">
-      No account yet? <button type="button" onclick={() => switchAuthMode('signup')}>Create one</button>
-    </p>
-    <p class="switch-mode">
-      Forgot your login password?
-      <button type="button" onclick={() => switchAuthMode('forgot-password')}>Reset it</button>
-    </p>
+    <!-- Every pre-unlock view shares one elevated card. Signed-in vault
+         content deliberately doesn't - a list that grows to any length
+         shouldn't sit inside a card that pretends it's a dialog. -->
+    <section class="auth-card">
+      {#if showOffline}
+        <OfflineUnlockForm
+          email={lastAccount.email}
+          onunlock={handleOfflineUnlock}
+          ononline={() => (forceOffline = false)}
+          {loading}
+        />
+      {:else if !online}
+        <p class="error" role="alert">
+          You're offline, and this device has never signed in to Small Stash before - connect to the internet to sign
+          in for the first time.
+        </p>
+      {:else if authMode === 'signup'}
+        <SignupForm oncomplete={handleSignupComplete} oncancel={() => switchAuthMode('login')} />
+      {:else if authMode === 'forgot-password'}
+        <ForgotPasswordForm oncomplete={handlePasswordResetComplete} oncancel={() => switchAuthMode('login')} />
+      {:else}
+        <LoginForm onlogin={handleLogin} {loading} />
+        <div class="switch-modes">
+          <p class="switch-mode">
+            No account yet?
+            <button type="button" class="link" onclick={() => switchAuthMode('signup')}>Create one</button>
+          </p>
+          <p class="switch-mode">
+            Forgot your login password?
+            <button type="button" class="link" onclick={() => switchAuthMode('forgot-password')}>Reset it</button>
+          </p>
+        </div>
+      {/if}
+    </section>
   {/if}
 </main>
 
 <style>
   /**
-   * Global page theme - was missing entirely until now, which is the actual
-   * bug behind "black text on black background": several boxes elsewhere
-   * (EntryListItem's expanded entry view, the password generator preview,
-   * the signup Recovery Key display) use a dark background (#14171b) on the
-   * assumption of a dark theme (matching the manifest's theme_color/
-   * background_color and the app icon), but nothing ever set the page's own
-   * background or default text color - browsers fell back to their default
-   * (white background, black text), so those dark boxes had black text on
-   * a near-black background with nothing readable in between.
-   *
-   * `color-scheme: dark` additionally makes native form controls (text
-   * inputs, checkboxes, the password generator's range slider) render with
-   * the browser's built-in dark styling automatically, instead of a stray
-   * white input box on an otherwise dark page.
+   * Page theme (background, text colour, `color-scheme: dark`) now lives in
+   * src/app.css alongside the design tokens - it used to be a :global block
+   * here, which is why it was missing entirely for a while and produced the
+   * "black text on black background" bug: several boxes assumed a dark
+   * theme while nothing set the page's own background. Anything global
+   * belongs in app.css now; this block is layout for the shell only.
    */
-  :global(html) {
-    color-scheme: dark;
-  }
-  :global(body) {
-    margin: 0;
-    background: #1b1f24;
-    color: #e6e6e6;
-  }
 
   main {
-    max-width: 640px;
+    /* 42rem, not the old fixed 640px: the auth card wants to stay narrow
+       and readable, and a rem-based cap grows with a user's font size
+       instead of squeezing the same line into a fixed pixel box. */
+    max-width: 42rem;
     margin: 0 auto;
-    padding: 1.5rem;
-    font-family: system-ui, sans-serif;
+    padding: var(--ss-space-5) var(--ss-space-4) var(--ss-space-7);
+    display: flex;
+    flex-direction: column;
+    /* Vertical rhythm comes from one gap on the shell rather than each
+       child carrying its own margin-bottom, which is how the old spacing
+       drifted per view. */
+    gap: var(--ss-space-4);
   }
-  header h1 {
+
+  .app-bar {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    font-size: 1.25rem;
-    margin-bottom: 1rem;
+    justify-content: space-between;
+    gap: var(--ss-space-3);
+    padding-bottom: var(--ss-space-4);
+    border-bottom: 1px solid var(--ss-border);
   }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--ss-space-2);
+    font-size: var(--ss-text-xl);
+    /* Slightly tighter than the token default - a two-word wordmark reads
+       as one unit at display size. */
+    letter-spacing: -0.02em;
+  }
+
   .stash-glyph {
-    width: 1.1em;
-    height: 1.1em;
+    width: 1.5rem;
+    height: 1.5rem;
     flex-shrink: 0;
+    /* Lifts the pouch off the flat header without a border or plate. */
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1rem;
+
+  .auth-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-4);
+    padding: var(--ss-space-5);
+    background: var(--ss-surface);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-lg);
+    box-shadow: var(--ss-shadow-2);
   }
-  .notice {
-    background: #3a2f0f;
-    color: #f0d68a;
-    border: 1px solid #6b5a2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
+
+  .switch-modes {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-2);
+    padding-top: var(--ss-space-4);
+    border-top: 1px solid var(--ss-border);
   }
+
   .switch-mode {
-    margin-top: 1rem;
-    font-size: 0.9rem;
+    font-size: var(--ss-text-sm);
+    color: var(--ss-text-muted);
   }
-  .switch-mode button {
-    background: none;
-    border: none;
-    color: #5ac8a8;
-    cursor: pointer;
-    padding: 0;
-    font-size: inherit;
-    text-decoration: underline;
+
+  /* Tighter gutters on a phone - a 24px card inset inside a 16px page inset
+     eats most of the line length these forms need at 360px wide. */
+  @media (max-width: 32rem) {
+    main {
+      padding: var(--ss-space-4) var(--ss-space-3) var(--ss-space-6);
+      gap: var(--ss-space-3);
+    }
+    .auth-card {
+      padding: var(--ss-space-4);
+    }
+    .brand {
+      font-size: var(--ss-text-lg);
+    }
   }
 </style>

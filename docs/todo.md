@@ -35,22 +35,110 @@ passing for real). Expect close to 16/16 clean; anything still red is a
 real, new finding worth investigating rather than an artifact of the
 undeployed state.
 
-## Restyle the UI (2026-08-25)
+## Restyle the UI - visual pass done (2026-08-25)
 
-Raised in conversation, not scoped yet - the app's visual design has never
-had a dedicated pass. Current UI is functional (dark theme fix, the Rust
-"Small Stash" pouch nod in the header/icons, per-field consistency passes)
-but was never designed as a whole - it's grown feature-by-feature.
+The open question above ("token pass or structural rework?") was settled
+as **a design-token pass plus component-level restyling, no structural
+rework** - navigation, view flow, and every piece of copy are unchanged.
+Scope was explicitly *visual only*; UX was deferred by the user to a
+separate pass (see the next section).
 
-- [ ] **Scope and do a UI restyle.** Open question to settle first: how
-      much - a design-token/spacing/typography pass over the existing
-      layout, or a more structural rework (nav, layout, component
-      library)? Related, smaller items already found and worth folding in
-      if this happens: the Notes field's resize handle was reportedly a
-      near-invisible dot on Android before the 2026-08-25 fix (see below) -
-      a broader mobile/touch-target pass might turn up more of the same
-      class of issue elsewhere (buttons, toggles, the entry list's tap
-      targets).
+**What landed:**
+
+- **New `web/src/app.css`** - the first shared stylesheet in the project,
+  imported from `main.js`. Holds design tokens (an elevation ladder of
+  surface colours, a teal accent, semantic danger/warn/success triples, a
+  4px spacing grid, a 5-step type scale, radii, shadows, a focus ring) plus
+  base styling for `input`/`textarea`/`button`/`hr` and the shared
+  `.error`/`.notice`/`.success`/`.field` blocks.
+- **De-duplication was most of the work.** The same button rule was
+  written nine times across components and the `.error` box six times, and
+  they had already drifted - buttons were `0.6rem/1rem` in the auth forms
+  and `0.3rem/0.85rem` inside a vault entry, with no shared idea of a
+  spacing or type scale. Those copies are deleted; components now hold
+  only their own layout.
+- **Button variants** (`.primary`, `.danger`, `.ghost`, `.link`,
+  `.compact`) replace nine visually identical buttons per screen, so each
+  view now has exactly one obvious primary action.
+- **Real focus states.** Nothing styled `:focus` before - the app relied on
+  the UA default, which is close to invisible on a dark background. Now
+  one `:focus-visible` ring, defined once.
+- **Touch targets**: controls have a 44px minimum height (`.compact` is
+  36px where a full-size control would out-weigh the content it acts on),
+  which is the "broader mobile/touch-target pass" the old note asked for.
+- **Component-level restyling**: auth views share one elevated card; the
+  Show/Hide toggle now sits *inside* the password input instead of beside
+  it; vault entries are cards with a rotating disclosure caret rather than
+  hairline-separated rows; the vault toolbar is sticky (so "Save vault"
+  can't scroll away) with "Unsaved changes" as a status pill; the Recovery
+  Key gets the strongest treatment in the app (brand-tan on a sunken
+  panel, monospace, tracked, `user-select: all`); the generator's password
+  preview is accent-coloured and its checkboxes are a 2-column grid.
+- **Canvas colour changed** to `#0f1317`. Kept in sync in all three places
+  it appears: `--ss-canvas` in `app.css`, the `theme-color` meta in
+  `index.html`, and `theme_color`/`background_color` in `vite.config.js`'s
+  PWA manifest - a mismatch there shows as a visible seam above an
+  installed PWA on launch.
+
+**CSP constraints this had to respect** (worth knowing before the next
+styling change): the deployed policy is `style-src 'self'` and
+`font-src 'self'` with no `'unsafe-inline'`. So no external webfonts (the
+system stack is used), and **no `style=""` attributes in markup** - they
+would be blocked outright. Dynamic sizing must go through the CSSOM
+instead, the way `ResizableTextarea.svelte` already sets
+`el.style.height`. Verified against the built output, not assumed: `npm run
+build` emits an external `<link rel="stylesheet">` and zero inline
+`<style>` blocks, and there are no `style="` attributes anywhere in
+`web/src`.
+
+**Verified**: `npm test` 97/97, `npm run build` clean with no unused-CSS
+warnings, and the login/signup/forgot-password/vault views driven in a
+headless Chromium at both 900px and 390px wide with no console errors.
+Two defects were found that way and fixed rather than shipped - vault
+entry summaries were centre-aligned (the shared `button` rule's
+`justify-content: center` leaking into the disclosure row) and the
+add-entry card was narrower than the entry list above it.
+
+- [ ] **Not visually verified: the signup Recovery Key screen.** It's the
+      one view that can't be reached without completing a real signup
+      against the live pool, so its restyle (the brand-tan key panel and
+      the "I've saved this" checkbox card) has only been checked by build
+      and code read. Worth a look on the next real signup run-through.
+- [ ] **Not verified on real hardware.** Everything above is headless
+      Chromium at two viewport widths - no real phone, no Safari/Firefox.
+      Fold into the existing manual-verification list further down this
+      file rather than treating it as separate work.
+
+## UX pass - deferred, not started (2026-08-25)
+
+Deliberately excluded from the visual restyle above at the user's request
+("don't care about UX, I will address it later"). The restyle changed how
+the app *looks*, and did not change a single interaction, flow, or piece of
+copy - so every UX rough edge that existed before still exists.
+
+- [ ] **Do a UX pass.** Not scoped yet. Things already visible from doing
+      the visual work, as a starting point rather than the final list:
+      - **No search or filter over entries**, and no sort - the vault is
+        whatever order entries were added in. Fine at three entries,
+        not at fifty. This is the single biggest one.
+      - **Saving is manual and easy to lose.** "Save vault" is a discrete
+        button; unsaved edits are guarded only by a `beforeunload` prompt
+        and a sign-out `confirm()`. The sticky toolbar makes the button
+        reachable, which is a paint fix for a behaviour question that
+        remains open (autosave? save-on-blur? leave it explicit?).
+      - **Destructive and confirmation dialogs are native `confirm()`**
+        (delete entry, sign out with unsaved changes) - functional, but
+        unstyleable and inconsistent with everything around them.
+      - **Add-entry is a permanent form at the bottom of the list**, not a
+        dialog or a dedicated view, so it's below the fold on any
+        non-trivial vault.
+      - **Error messages are raw `err.message` in several places** (see
+        `errors.js`'s `friendlyAuthErrorMessage` for the pattern that
+        exists but isn't applied everywhere).
+      - **Field-level validation feedback is form-level** - errors appear
+        in one alert box at the top rather than against the field that
+        caused them. Overlaps with the already-tracked "UI input validation
+        review" item below; do them together.
 
 ## Notes field resize handle unusable on Android - fixed (2026-08-25)
 

@@ -8,3 +8,7 @@ dev-dist/
 test-results/
 playwright-report/
 blob-report/
+
+# Ad-hoc design-review screenshots (2026-08-25 UI restyle) - scratch output
+# from driving the app in a headless browser, regenerate rather than commit
+shots/

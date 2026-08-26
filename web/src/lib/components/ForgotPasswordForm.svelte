@@ -68,72 +68,76 @@
 
 {#if step === 'request'}
   <form onsubmit={submitRequest}>
-    <p>Enter your account email and we'll send a verification code to reset your login password.</p>
-    <label>
+    <p class="lead">Enter your account email and we'll send a verification code to reset your login password.</p>
+    <label class="field">
       Email
       <input type="email" bind:value={email} autocomplete="username" required />
     </label>
     <div class="actions">
-      <button type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send code'}</button>
+      <button type="submit" class="primary" disabled={busy}>{busy ? 'Sending…' : 'Send code'}</button>
       <button type="button" onclick={oncancel} disabled={busy}>Back to sign in</button>
     </div>
   </form>
 {:else}
   <form onsubmit={submitConfirm}>
-    <p>We emailed a verification code to <strong>{email}</strong>.</p>
-    <label>
+    <p class="lead">We emailed a verification code to <strong>{email}</strong>.</p>
+    <label class="field">
       Verification code
-      <input bind:value={code} autocomplete="one-time-code" required />
+      <input class="code-input" bind:value={code} autocomplete="one-time-code" required />
     </label>
-    <label>
+    <label class="field">
       New login password
       <PasswordField bind:value={newPassword} autocomplete="new-password" required />
       <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
     </label>
-    <label>
+    <label class="field">
       Confirm new login password
       <PasswordField bind:value={confirmNewPassword} autocomplete="new-password" required />
     </label>
     <div class="actions">
-      <button type="submit" disabled={busy}>{busy ? 'Resetting…' : 'Reset password'}</button>
+      <button type="submit" class="primary" disabled={busy}>{busy ? 'Resetting…' : 'Reset password'}</button>
       <button type="button" onclick={oncancel} disabled={busy}>Back to sign in</button>
     </div>
   </form>
 {/if}
 
 <style>
+  /* Shared field/button/`.error` styling comes from src/app.css. */
   form {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--ss-space-4);
   }
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
+
+  /* Explanatory sentence above a form - full body colour would compete
+     with the field labels for the eye's first stop. */
+  .lead {
+    color: var(--ss-text-muted);
+    font-size: var(--ss-text-base);
   }
-  input {
-    padding: 0.5rem;
-    font-size: 1rem;
+
+  .lead strong {
+    color: var(--ss-text);
   }
-  small {
-    color: #888;
-  }
+
   .actions {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+    margin-top: var(--ss-space-1);
   }
-  button {
-    padding: 0.6rem;
-    font-size: 1rem;
-    cursor: pointer;
+
+  .actions button.primary {
+    flex: 1;
+    min-width: 10rem;
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  /* Matches the same treatment in SignupForm - a verification code is short
+     and mechanical, so it gets a short, tracked, monospace field. */
+  .code-input {
+    max-width: 14rem;
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-text-lg);
+    letter-spacing: 0.35em;
   }
 </style>

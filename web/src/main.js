@@ -1,5 +1,6 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
+import './app.css';
 import { loadConfig } from './lib/config.js';
 
 // Runtime config must resolve before App mounts - session.js/api/client.js

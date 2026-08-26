@@ -54,23 +54,25 @@
     <button type="button" onclick={onclose}>Close</button>
   {:else}
     <form onsubmit={submit}>
-      <label>
+      <label class="field">
         Current login password
         <PasswordField bind:value={currentLoginPassword} autocomplete="current-password" required />
       </label>
 
-      <label>
+      <hr />
+
+      <label class="field">
         New login password
         <PasswordField bind:value={newLoginPassword} autocomplete="new-password" required />
         <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
       </label>
-      <label>
+      <label class="field">
         Confirm new login password
         <PasswordField bind:value={confirmNewLoginPassword} autocomplete="new-password" required />
       </label>
 
       <div class="actions">
-        <button type="submit" disabled={busy}>{busy ? 'Changing…' : 'Change login password'}</button>
+        <button type="submit" class="primary" disabled={busy}>{busy ? 'Changing…' : 'Change login password'}</button>
         <button type="button" onclick={onclose} disabled={busy}>Cancel</button>
       </div>
     </form>
@@ -78,51 +80,51 @@
 </div>
 
 <style>
+  /* Shared field/button/hr/`.error`/`.success` styling: src/app.css.
+     Kept visually identical to ChangeMasterPasswordForm - they're siblings
+     in the same toolbar and shouldn't look like different features. */
   .panel {
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 1rem;
-    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-4);
+    padding: var(--ss-space-5);
+    background: var(--ss-surface);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-lg);
+    box-shadow: var(--ss-shadow-2);
   }
+
   h2 {
-    font-size: 1rem;
-    margin-top: 0;
+    font-size: var(--ss-text-lg);
   }
+
   form {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--ss-space-4);
   }
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
-  }
-  small {
-    color: #888;
-  }
+
   .actions {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+    margin-top: var(--ss-space-1);
   }
-  button {
-    padding: 0.6rem;
-    font-size: 1rem;
-    cursor: pointer;
+
+  .actions button.primary {
+    flex: 1;
+    min-width: 14rem;
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  /* Aligns the standalone Close button with the form's action row rather
+     than letting it stretch the full panel width. */
+  .panel > button {
+    align-self: flex-start;
   }
-  .success {
-    background: #1d3a24;
-    color: #a8f0b8;
-    border: 1px solid #2c6b3c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  @media (max-width: 32rem) {
+    .panel {
+      padding: var(--ss-space-4);
+    }
   }
 </style>

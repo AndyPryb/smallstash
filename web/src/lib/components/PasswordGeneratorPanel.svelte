@@ -56,8 +56,8 @@
   <code class="preview">{password}</code>
 
   <div class="row">
-    <button type="button" onclick={regenerate}>Regenerate</button>
-    <button type="button" onclick={copy} disabled={!password}>{copied ? 'Copied!' : 'Copy'}</button>
+    <button type="button" class="compact" onclick={regenerate}>Regenerate</button>
+    <button type="button" class="compact" onclick={copy} disabled={!password}>{copied ? 'Copied!' : 'Copy'}</button>
   </div>
 
   <label class="length">
@@ -70,73 +70,106 @@
     <label><input type="checkbox" bind:checked={uppercase} /> A-Z</label>
     <label><input type="checkbox" bind:checked={digits} /> 0-9</label>
     <label><input type="checkbox" bind:checked={symbols} /> !@#$…</label>
-    <label><input type="checkbox" bind:checked={excludeAmbiguous} /> Exclude ambiguous (I l 1 O 0)</label>
+    <label class="wide"><input type="checkbox" bind:checked={excludeAmbiguous} /> Exclude ambiguous (I l 1 O 0)</label>
   </div>
 
   <div class="row">
-    <button type="button" onclick={use} disabled={!password}>Use this password</button>
-    <button type="button" onclick={onclose}>Cancel</button>
+    <button type="button" class="primary compact" onclick={use} disabled={!password}>Use this password</button>
+    <button type="button" class="compact" onclick={onclose}>Cancel</button>
   </div>
 </div>
 
 <style>
+  /* Button and `.error` styling is shared - see src/app.css. */
   .panel {
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 1rem;
-    margin: 0.5rem 0 1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    max-width: 360px;
+    gap: var(--ss-space-4);
+    /* Accent-tinted left edge marks this as a transient tool that opened
+       inside the form, rather than another permanent section of it. */
+    border: 1px solid var(--ss-border);
+    border-left: 3px solid var(--ss-accent-quiet);
+    border-radius: var(--ss-radius-md);
+    padding: var(--ss-space-4);
+    margin: var(--ss-space-1) 0;
+    background: var(--ss-surface-raised);
   }
+
   h2 {
-    font-size: 1rem;
-    margin: 0;
+    font-size: var(--ss-text-base);
+    color: var(--ss-text-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
   }
+
+  /**
+   * The generated password is the whole point of this panel, so it's the
+   * largest, brightest thing in it: accent-coloured monospace on the
+   * sunken surface, sized to stay legible when it's 64 random characters
+   * wrapped over three lines.
+   */
   .preview {
     display: block;
-    font-size: 1rem;
-    letter-spacing: 0.03em;
-    padding: 0.75rem;
-    background: #14171b;
-    border: 1px solid #333;
-    border-radius: 6px;
-    word-break: break-all;
+    min-height: 3.25rem;
+    padding: var(--ss-space-3);
+    background: var(--ss-surface-sunken);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-md);
+    color: var(--ss-accent);
+    font-size: var(--ss-text-lg);
+    line-height: 1.5;
+    letter-spacing: 0.04em;
     text-align: center;
-    min-height: 1.2em;
+    word-break: break-all;
+    user-select: all;
   }
+
   .row {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
   }
+
   .length {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
+    gap: var(--ss-space-2);
+    font-size: var(--ss-text-sm);
+    font-weight: 500;
+    color: var(--ss-text-muted);
   }
+
+  /* Two columns: the four character-class toggles are short and pair
+     naturally, which halves the panel's height inside an already-long
+     form. The ambiguous-characters toggle spans both. */
   .checkboxes {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    font-size: 0.9rem;
+    display: grid;
+    /* max-content columns, not 1fr: "a-z" and "A-Z" are three characters
+       each, and equal fractions stranded them at opposite ends of the
+       panel with a chasm between the box and its own label. */
+    grid-template-columns: repeat(2, minmax(0, max-content));
+    justify-content: start;
+    column-gap: var(--ss-space-5);
+    row-gap: var(--ss-space-1);
+    font-size: var(--ss-text-sm);
   }
+
   .checkboxes label {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-  }
-  button {
-    padding: 0.5rem;
-    font-size: 0.9rem;
+    gap: var(--ss-space-2);
+    padding: var(--ss-space-2);
+    border: 1px solid transparent;
+    border-radius: var(--ss-radius-sm);
     cursor: pointer;
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  .checkboxes label:hover {
+    background: var(--ss-surface-hover);
+    border-color: var(--ss-border);
+  }
+
+  .checkboxes label.wide {
+    grid-column: 1 / -1;
   }
 </style>

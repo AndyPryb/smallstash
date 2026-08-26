@@ -127,7 +127,7 @@
 
 {#if step === 'register'}
   <form onsubmit={submitRegister}>
-    <label>
+    <label class="field">
       Invite code
       <input
         bind:value={inviteCode}
@@ -140,47 +140,47 @@
       <small>Small Stash is invite-only. Ask whoever runs this instance for a code.</small>
     </label>
 
-    <label>
+    <label class="field">
       Email
       <input type="email" bind:value={email} autocomplete="username" required />
     </label>
 
-    <label>
+    <label class="field">
       Login password
       <PasswordField bind:value={loginPassword} autocomplete="new-password" required />
       <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
     </label>
-    <label>
+    <label class="field">
       Confirm login password
       <PasswordField bind:value={confirmLoginPassword} autocomplete="new-password" required />
     </label>
 
     <hr />
 
-    <label>
+    <label class="field">
       Master Password
       <PasswordField bind:value={masterPassword} autocomplete="off" required />
       <small>Encrypts your vault. Never sent to the server - keep it different from your login password, and don't lose it (that's what the Recovery Key on the next screen is for). At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
     </label>
-    <label>
+    <label class="field">
       Confirm Master Password
       <PasswordField bind:value={confirmMasterPassword} autocomplete="off" required />
     </label>
 
     <div class="actions">
-      <button type="submit" disabled={busy}>{busy ? 'Creating account…' : 'Create account'}</button>
+      <button type="submit" class="primary" disabled={busy}>{busy ? 'Creating account…' : 'Create account'}</button>
       <button type="button" onclick={oncancel} disabled={busy}>Back to sign in</button>
     </div>
   </form>
 {:else if step === 'confirm'}
   <form onsubmit={submitConfirm}>
     <p>We emailed a verification code to <strong>{email}</strong>.</p>
-    <label>
+    <label class="field">
       Verification code
-      <input inputmode="numeric" autocomplete="one-time-code" bind:value={code} required />
+      <input class="code-input" inputmode="numeric" autocomplete="one-time-code" bind:value={code} required />
     </label>
     <div class="actions">
-      <button type="submit" disabled={busy}>{busy ? 'Verifying…' : 'Verify and continue'}</button>
+      <button type="submit" class="primary" disabled={busy}>{busy ? 'Verifying…' : 'Verify and continue'}</button>
     </div>
   </form>
 {:else if step === 'recovery'}
@@ -195,70 +195,85 @@
       I've saved this Recovery Key somewhere safe
     </label>
     <div class="actions">
-      <button type="button" onclick={finish} disabled={!recoveryKeySaved}>Continue to vault</button>
+      <button type="button" class="primary" onclick={finish} disabled={!recoveryKeySaved}>Continue to vault</button>
     </div>
   </div>
 {/if}
 
 <style>
+  /* Field/label/hint/hr/button/`.error` styling is shared - see src/app.css.
+     Only this component's layout and the Recovery Key treatment live here. */
   form,
   .recovery {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--ss-space-4);
   }
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
-  }
-  input {
-    padding: 0.5rem;
-    font-size: 1rem;
-  }
-  small {
-    color: #888;
-  }
-  hr {
-    /* See LoginForm.svelte for why this reset is needed - browser-default
-       hr margins disable flexbox stretch, collapsing it to a stray dot. */
-    width: 100%;
-    border: none;
-    border-top: 1px solid #333;
-    margin: 0;
-  }
+
   .actions {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+    margin-top: var(--ss-space-1);
   }
-  button {
-    padding: 0.6rem;
-    font-size: 1rem;
-    cursor: pointer;
+
+  /* The primary action takes the remaining width so it stays the obvious
+     target, with any secondary ("Back to sign in") sized to its own text. */
+  .actions button.primary {
+    flex: 1;
+    min-width: 12rem;
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  /* A one-time code is short and mechanical - a full-width field invites
+     the wrong kind of input, and wide letter-spacing makes a mistyped
+     digit easy to spot. */
+  .code-input {
+    max-width: 14rem;
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-text-lg);
+    letter-spacing: 0.35em;
   }
+
+  /**
+   * The Recovery Key is shown exactly once, ever, and is the only way back
+   * into the vault - so it gets the strongest emphasis in the whole app:
+   * brand-tan border and text on a sunken panel, monospace, generously
+   * tracked and large enough to transcribe by hand from a phone screen.
+   * Deliberately not the teal accent, which everywhere else means "this is
+   * a button you can press."
+   */
   .recovery-key {
     display: block;
-    font-family: monospace;
-    font-size: 1.1rem;
-    letter-spacing: 0.05em;
-    padding: 1rem;
-    background: #14171b;
-    border: 1px solid #333;
-    border-radius: 6px;
-    word-break: break-all;
+    padding: var(--ss-space-4);
+    background: var(--ss-surface-sunken);
+    border: 1px solid var(--ss-brand);
+    border-radius: var(--ss-radius-md);
+    box-shadow: inset 0 0 0 1px rgba(201, 166, 107, 0.12);
+    color: var(--ss-brand);
+    font-size: var(--ss-text-lg);
+    line-height: 1.7;
+    letter-spacing: 0.12em;
     text-align: center;
+    word-break: break-all;
+    /* Selectable by design - "Copy" can fail when the clipboard API is
+       blocked, and hand-selecting the text is the documented fallback. */
+    user-select: all;
   }
+
   .confirm-saved {
+    display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--ss-space-3);
+    padding: var(--ss-space-3);
+    background: var(--ss-surface-raised);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-md);
+    font-size: var(--ss-text-base);
+    cursor: pointer;
+  }
+
+  .confirm-saved:hover {
+    border-color: var(--ss-border-strong);
   }
 </style>
