@@ -7,10 +7,19 @@
    */
   import { changeLoginPassword } from '../session.js';
   import { friendlyAuthErrorMessage } from '../errors.js';
+  import { LOGIN_PASSWORD_RULES } from '../policy.js';
   import PasswordField from './PasswordField.svelte';
+  import PasswordRequirements from './PasswordRequirements.svelte';
+  import Alert from './Alert.svelte';
 
   /** @type {{ onclose: () => void }} */
   let { onclose } = $props();
+
+  // See LoginForm for why fields use explicit for/id + aria-describedby.
+  // Also load-bearing here specifically: this form and
+  // ChangeMasterPasswordForm can both be open at once, so their field ids
+  // must not collide.
+  const uid = $props.id();
 
   let currentLoginPassword = $state('');
   let newLoginPassword = $state('');
@@ -46,33 +55,51 @@
   <h2>Change Login Password</h2>
 
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <Alert variant="error" ondismiss={() => (error = '')}>{error}</Alert>
   {/if}
 
   {#if done}
-    <p class="success">Login password changed.</p>
+    <Alert variant="success">Login password changed.</Alert>
     <button type="button" onclick={onclose}>Close</button>
   {:else}
+    <Alert variant="notice">
+      This changes how you <strong>sign in</strong>. Your Master Password and the contents of your vault are not
+      affected.
+    </Alert>
+
     <form onsubmit={submit}>
-      <label class="field">
-        Current login password
-        <PasswordField bind:value={currentLoginPassword} autocomplete="current-password" required />
-      </label>
+      <div class="field">
+        <label for="{uid}-current">Current login password</label>
+        <PasswordField id="{uid}-current" bind:value={currentLoginPassword} fieldName="current login password" autocomplete="current-password" required />
+      </div>
 
       <hr />
 
-      <label class="field">
-        New login password
-        <PasswordField bind:value={newLoginPassword} autocomplete="new-password" required />
-        <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
-      </label>
-      <label class="field">
-        Confirm new login password
-        <PasswordField bind:value={confirmNewLoginPassword} autocomplete="new-password" required />
-      </label>
+      <div class="field">
+        <label for="{uid}-new">New login password</label>
+        <PasswordField id="{uid}-new" bind:value={newLoginPassword} fieldName="new login password" autocomplete="new-password" required />
+      </div>
+      <!-- Guidance only - this form deliberately has no blocking pre-check,
+           so a policy-compliant-but-breached password still reaches Cognito
+           and gets caught by its compromised-credential screening
+           (e2e/change-login-password.spec.js depends on that path). -->
+      <PasswordRequirements value={newLoginPassword} rules={LOGIN_PASSWORD_RULES} />
+      <div class="field">
+        <label for="{uid}-confirm-new">Confirm new login password</label>
+        <PasswordField
+          id="{uid}-confirm-new"
+          bind:value={confirmNewLoginPassword} fieldName="new login password confirmation"
+          autocomplete="new-password"
+          required
+        />
+      </div>
 
       <div class="actions">
-        <button type="submit" class="primary" disabled={busy}>{busy ? 'Changing…' : 'Change login password'}</button>
+        <!-- "Update", not "Change" - see ChangeMasterPasswordForm for why.
+             This one used to differ from the toolbar's "Change Login
+             Password" only by capitalisation, which e2e had to match
+             exactly to disambiguate. -->
+        <button type="submit" class="primary" disabled={busy}>{busy ? 'Updating…' : 'Update login password'}</button>
         <button type="button" onclick={onclose} disabled={busy}>Cancel</button>
       </div>
     </form>

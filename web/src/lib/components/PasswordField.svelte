@@ -9,15 +9,50 @@
    * and `<small>` hint markup, which varies per field.
    */
 
-  /** @type {{ value: string, autocomplete?: string, required?: boolean }} */
-  let { value = $bindable(''), autocomplete = 'off', required = false } = $props();
+  /**
+   * `id`/`describedby` exist so callers can associate the field with an
+   * external `<label for>` and hint instead of wrapping it in a `<label>`.
+   * That matters more than it sounds: with a wrapping label, the *entire*
+   * label subtree becomes the input's accessible name - so this component's
+   * own "Show" button, and any hint text next to it, got announced as part
+   * of the field's name ("Login password Show Your account sign-in
+   * password."). Explicit association keeps the name to just the label.
+   *
+   * `fieldName` names what the toggle reveals, for the button's accessible
+   * name only - the visible text stays the compact "Show"/"Hide". Without
+   * it, a form with four password fields has four buttons all called
+   * "Show", which is unusable when tabbing through by ear (and ambiguous to
+   * any role-based query). Same defect as the two "Change Master Password"
+   * buttons, one level down.
+   *
+   * @type {{
+   *   value: string,
+   *   autocomplete?: string,
+   *   required?: boolean,
+   *   id?: string,
+   *   describedby?: string,
+   *   fieldName?: string,
+   * }}
+   */
+  let {
+    value = $bindable(''),
+    autocomplete = 'off',
+    required = false,
+    id = undefined,
+    describedby = undefined,
+    fieldName = undefined,
+  } = $props();
 
   let show = $state(false);
+
+  // Falls back to the visible text when no fieldName is given, rather than
+  // producing "Show undefined".
+  let toggleLabel = $derived(fieldName ? `${show ? 'Hide' : 'Show'} ${fieldName}` : undefined);
 </script>
 
 <span class="password-field">
-  <input type={show ? 'text' : 'password'} bind:value {autocomplete} {required} />
-  <button type="button" onclick={() => (show = !show)}>{show ? 'Hide' : 'Show'}</button>
+  <input type={show ? 'text' : 'password'} bind:value {autocomplete} {required} {id} aria-describedby={describedby} />
+  <button type="button" aria-label={toggleLabel} onclick={() => (show = !show)}>{show ? 'Hide' : 'Show'}</button>
 </span>
 
 <style>

@@ -109,15 +109,205 @@ add-entry card was narrower than the entry list above it.
       Fold into the existing manual-verification list further down this
       file rather than treating it as separate work.
 
-## UX pass - deferred, not started (2026-08-25)
+## UX pass - first slice done, not committed, not deployed (2026-08-26)
 
-Deliberately excluded from the visual restyle above at the user's request
-("don't care about UX, I will address it later"). The restyle changed how
-the app *looks*, and did not change a single interaction, flow, or piece of
-copy - so every UX rough edge that existed before still exists.
+Two specific asks, both done: **dismissible message boxes**, and **more
+explanation of how the app works** (starting with the two-password model,
+which was singled out as unclear to a non-technical user).
 
-- [ ] **Do a UX pass.** Not scoped yet. Things already visible from doing
-      the visual work, as a starting point rather than the final list:
+⚠️ **Uncommitted and undeployed by request.** The visual restyle above is
+committed (`27c8ae8`); everything in this section is working-tree only.
+
+**Three new components:**
+
+- **`Alert.svelte`** - one message box for errors, notices and
+  confirmations, replacing three near-identical copies that had drifted.
+  Adds a close button, a per-variant icon, and the right ARIA role
+  (`alert`/assertive for errors, `status`/polite for the rest).
+  Two deliberate rules, both following how mainstream apps behave:
+  - **Dismissal is parent-owned.** The component has no internal "hidden"
+    flag - it calls `ondismiss` and the parent clears the state rendering
+    it. Had it hidden itself, the *next* error with the same text would be
+    swallowed: still hidden, while the parent believed it had shown
+    something.
+  - **A message with no `ondismiss` renders with no close button**, for
+    conditions a user can't acknowledge away ("You're offline" - closing it
+    wouldn't make it false). Errors never auto-dismiss; the one success
+    confirmation (vault saved) auto-retires after 4s *and* can be closed.
+- **`TwoSecretsExplainer.svelte`** - the "why two passwords?" answer in
+  plain language: what each one does, why the split makes the vault private
+  even from whoever runs the server, and the consequence that matters most
+  (a forgotten Master Password cannot be reset by anyone). Progressive
+  disclosure, matching 1Password/Bitwarden's handling of their equivalent
+  account-password-plus-Secret-Key problem: **collapsed** on sign-in, where
+  a returning user doesn't need it re-explained daily, **open** at signup,
+  where it's first contact and the choice is irreversible. Native
+  `<details>`/`<summary>` - keyboard/screen-reader accessible for free, no
+  inline styles (which the CSP forbids).
+- **`PasswordRequirements.svelte`** - live checklist ticking off as you
+  type, replacing "submit, get rejected, work out which part failed."
+
+**Rules moved into `policy.js` as data**, not a regex.
+`LOGIN_PASSWORD_RULES` (+ `validateLoginPassword`, same message as before -
+`signup-negative.spec.js` asserts on the "12+ characters" substring) and
+`MASTER_PASSWORD_RULES`. The checklist and the submit-time rejection now
+read the same list, so they can't disagree - **6 new tests** cover exactly
+that, including one asserting each rule fails in isolation so no rule is
+dead or duplicating another. Still mirrors the Cognito pool policy in
+`SmallstashStack.java` **by hand**; nothing enforces that.
+
+**`ChangeLoginPasswordForm` deliberately still has no blocking pre-check** -
+only the non-blocking checklist. `change-login-password.spec.js` depends on
+a weak password reaching Cognito so its compromised-credential screening
+answers. Adding a client-side gate there would have broken that spec and
+weakened the check.
+
+**Accessibility fix, found by trying to break it.** Fields wrapped their
+inputs in `<label>`, which makes the *whole* label subtree the input's
+accessible name - so PasswordField's "Show" button and every word of hint
+text got announced as part of the field's name. Adding hints made it much
+worse, and it showed up concretely: a new hint ending "…reset by email"
+made the login-password field also match `getByLabel('Email')`, which would
+have broken the specs. Now explicit `for`/`id` + `aria-describedby`
+(`$props.id()` for collision-free ids - load-bearing where both
+change-password panels can be open at once), so the accessible name is the
+label text and nothing else. The `✕` glyph on the close button became an
+SVG for the same class of reason: it was leaking into `textContent`, which
+`change-login-password.spec.js` reads.
+
+**Other explanations added:** what "Forgot password" does *not* reset;
+what changing the Master Password does and doesn't touch (the Recovery Key
+survives); that verification emails often land in spam (a known, tracked
+deliverability problem, see below); why offline unlock needs only one of
+the two secrets; concrete places to keep the Recovery Key; and that nothing
+leaves the browser until "Save vault" is pressed.
+
+**Verified**: `npm test` **103/103** (97 + 6 new), `npm run build` clean, no
+inline `<style>` or `style=""` in the output (CSP still satisfied), and a
+script replicating **every** `getByLabel`/`getByRole` selector the e2e suite
+uses, asserting each resolves to exactly one element - all pass against the
+running app. Alert variants and the checklist confirmed by headless
+screenshot.
+
+**Follow-up fixes in the same slice (2026-08-26), also uncommitted:**
+
+- **Only one settings panel can be open at a time.** Reported: opening
+  "Change Master Password" and then "Change Login Password" left both
+  expanded, pushing the second panel below the fold with nothing on screen
+  to suggest it had opened - it read as the button doing nothing. Fixed by
+  replacing the two independent booleans with a single
+  `openPanel: 'master-password' | 'login-password' | null`, which makes
+  both-open *unrepresentable* rather than something every future toggle has
+  to remember to prevent. The toggles also gained `aria-expanded`.
+  Verified by driving the real component: open A, open B, assert A is gone
+  and A's `aria-expanded` flipped to `false`, then the reverse, then that
+  re-clicking the same button closes it.
+- **"Sign out" is now the danger-outline variant.** It's the only control in
+  the toolbar that ends the session and, with unsaved changes, can lose work
+  (hence its `confirm`). Outline rather than solid red on purpose: a filled
+  danger button sitting next to the primary "Save vault" would fight it for
+  attention on a screen where signing out is the rarest action.
+
+- [x] **Duplicate accessible names - fixed (2026-08-26).** Found while
+      testing the panel change: the toolbar's "Change Master Password"
+      *toggle* and that panel's *submit* button had byte-identical
+      accessible names, so `getByRole('button', …)` was ambiguous (a
+      Playwright strict-mode violation) and a screen reader announced two
+      different actions identically.
+      **Fixed by making the copy actually different**, not by scoping the
+      query: submit buttons now read **"Update Master Password"** /
+      **"Update login password"** against the toolbar's "Change …" toggles.
+      This also retires the fragile trick the login pair depended on -
+      `change-login-password.spec.js` used to tell them apart by
+      *capitalisation alone* ("Change login password" vs "Change Login
+      Password"), which was one styling tweak away from breaking silently.
+      **`e2e/change-login-password.spec.js` was updated to match** (it now
+      clicks "Update login password") - the only spec that referenced the
+      old string.
+      Auditing for the same defect class turned up more of it, all fixed the
+      same way (visible text unchanged, `aria-label` carries the context):
+      - Every `PasswordField` toggle was just **"Show"**, so a form with four
+        password fields had four identically-named buttons. New optional
+        `fieldName` prop → "Show new Master Password", "Show current login
+        password", and so on.
+      - The add-entry form and an entry's edit form are **both on screen at
+        once**, and each had a "Show", a "Generate" and a Notes resize
+        handle - three collisions whenever any entry was being edited. Now
+        named per context ("Generate a password for GitHub" vs "…for the new
+        entry"); `ResizableTextarea` grew a `label` prop for the same reason.
+      - Per-entry "Delete entry" → "Delete GitHub", so it doesn't repeat
+        across rows now that its siblings are entry-named.
+      **Verified** by driving the real component and asserting *no two
+      buttons anywhere on screen share an accessible name*, in each state:
+      master panel open, login panel open, and an entry being edited
+      alongside the add form. Zero duplicates in all three.
+- [x] **`Alert.svelte` reactivity bug - fixed before it shipped.** `role`
+      was a plain `const` reading the `variant` prop, which captures it once
+      and never updates (Svelte's `state_referenced_locally` warning - I
+      initially mistook it for grep noise in the build output). Every caller
+      passes a fixed variant so it worked by luck; now `$derived`. The build
+      is warning-free again, which is the check that would have caught it.
+
+- [ ] **Run `npx playwright test` before committing this.** The selector
+      check above is a good proxy but not the suite itself; the specs that
+      need real credentials (login-authenticated, change-login-password,
+      offline-unlock) were not run.
+- [ ] **Consider whether the two-password explainer belongs on the sign-in
+      screen at all** once a user is past onboarding. It's collapsed, so
+      it costs one row - but the honest alternative is showing it only at
+      signup and from a help link.
+
+## Reorder vault entries by dragging (2026-08-26)
+
+Requested: hold and drag an entry to move it up or down the list - long-press
+on touch, press-and-drag with the mouse.
+
+**This needs no backend or database change.** That was the open question when
+it was raised, and the answer is no - checked against the code rather than
+assumed:
+
+- `vaultDocument.entries` is a plain **JS array**, and `crypto/vault.js`'s
+  `encryptVault` persists the vault as `JSON.stringify(vaultDocument)`. JSON
+  arrays are ordered, so **array position already *is* the stored order** -
+  it round-trips through save/load today without anything being added.
+- The backend never sees entries at all. `VaultController` takes a single
+  `ciphertextBase64` string, size-checks it, and hands the opaque bytes to
+  S3 (`S3VaultRepository`). It cannot parse, index or order vault contents -
+  that's the zero-knowledge guarantee, not an implementation gap. There is
+  no per-entry row anywhere to add a `position` column to.
+
+So this is entirely client-side: reorder the array, mark the vault dirty,
+and the existing "Save vault" writes the new order like any other edit.
+
+- [ ] **Implement drag-to-reorder in `VaultView`/`EntryListItem`.** Points
+      worth settling before writing it:
+      - **Pointer Events, not HTML5 drag-and-drop.** `dragstart`/`drop`
+        famously don't work on touch, and `ResizableTextarea.svelte` already
+        establishes the Pointer Events + `setPointerCapture` pattern in this
+        codebase for exactly that reason - reuse it rather than inventing a
+        second approach.
+      - **Long-press to start on touch**, because a plain drag gesture on a
+        vertical list is indistinguishable from scrolling it. Desktop can
+        start on press-and-move. (Note: the request mentioned *right*-click
+        for the mouse - worth confirming, since right-press-and-drag is a
+        very unusual binding and it also has to suppress the context menu.
+        Left press-and-hold, or an explicit drag handle, is the convention.)
+      - **A visible drag handle** is the accessible option and avoids
+        colliding with the existing tap-to-expand on the entry row. Whatever
+        is chosen, keyboard reordering needs an answer too - drag-only
+        reordering is unusable without a pointer, so this wants
+        `aria-grabbed`-style semantics or, more simply, move-up/move-down
+        controls as the accessible equivalent.
+      - Reordering must go through the same `vaultDocument.entries = [...]`
+        reassignment every other edit uses, so the `dirty` derivation and the
+        unsaved-changes guard pick it up automatically. An in-place
+        `splice` would silently not.
+
+## UX pass - remaining, not started
+
+The items below were **not** touched by the slice above.
+
+- [ ] **Do the rest of the UX pass.** Things visible from the work so far:
       - **No search or filter over entries**, and no sort - the vault is
         whatever order entries were added in. Fine at three entries,
         not at fifty. This is the single biggest one.
@@ -128,17 +318,24 @@ copy - so every UX rough edge that existed before still exists.
         remains open (autosave? save-on-blur? leave it explicit?).
       - **Destructive and confirmation dialogs are native `confirm()`**
         (delete entry, sign out with unsaved changes) - functional, but
-        unstyleable and inconsistent with everything around them.
+        unstyleable and inconsistent with everything around them. Now the
+        *only* remaining un-restyled UI surface, since every inline message
+        went through `Alert.svelte`.
       - **Add-entry is a permanent form at the bottom of the list**, not a
         dialog or a dedicated view, so it's below the fold on any
         non-trivial vault.
       - **Error messages are raw `err.message` in several places** (see
         `errors.js`'s `friendlyAuthErrorMessage` for the pattern that
-        exists but isn't applied everywhere).
-      - **Field-level validation feedback is form-level** - errors appear
-        in one alert box at the top rather than against the field that
-        caused them. Overlaps with the already-tracked "UI input validation
-        review" item below; do them together.
+        exists but isn't applied everywhere). Unchanged by the slice above -
+        those messages are now *dismissible and better presented*, but the
+        wording is still whatever the underlying error said.
+      - **Field-level validation feedback is still form-level** - errors
+        appear in one box at the top rather than against the field that
+        caused them. Partly mitigated for passwords by the live checklist,
+        which turns the most common case into guidance before submit; the
+        mismatch/duplicate-secret errors are still top-of-form. Overlaps
+        with the already-tracked "UI input validation review" item below;
+        do them together.
 
 ## Notes field resize handle unusable on Android - fixed (2026-08-25)
 

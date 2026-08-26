@@ -6,6 +6,7 @@
   import PasswordGeneratorPanel from './PasswordGeneratorPanel.svelte';
   import EntryListItem from './EntryListItem.svelte';
   import ResizableTextarea from './ResizableTextarea.svelte';
+  import Alert from './Alert.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onsignout: () => void }} */
   let { vaultDocument = $bindable(), onsignout } = $props();
@@ -28,8 +29,39 @@
 
   let saving = $state(false);
   let saveError = $state('');
-  let showChangePassword = $state(false);
-  let showChangeLoginPassword = $state(false);
+
+  // Saving used to be silent on success - the "Unsaved changes" pill simply
+  // disappeared, which is the absence of a signal rather than confirmation
+  // that anything reached the server. Says "encrypted on this device" too,
+  // because that reassurance is worth repeating at the exact moment data
+  // leaves the browser.
+  let saved = $state(false);
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let savedTimer;
+
+  // The offline banner describes an ongoing condition, so it isn't
+  // auto-dismissed - but it is a long paragraph that only needs reading
+  // once, so the user can close it.
+  let offlineNoticeDismissed = $state(false);
+  /**
+   * Which settings panel is open, as one value rather than a boolean each.
+   *
+   * With two independent booleans, opening the second panel left the first
+   * one open above it - pushing the new panel below the fold, with nothing
+   * on screen to suggest it had appeared at all, so it read as the button
+   * doing nothing. Modelling it as "at most one of these" makes both-open
+   * unrepresentable instead of something each new toggle has to remember to
+   * prevent.
+   *
+   * @type {'master-password' | 'login-password' | null}
+   */
+  let openPanel = $state(null);
+
+  /** @param {'master-password' | 'login-password'} panel */
+  function togglePanel(panel) {
+    openPanel = openPanel === panel ? null : panel;
+  }
+
   let showGenerator = $state(false);
   let showNewPassword = $state(false);
 
@@ -59,7 +91,17 @@
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    return () => {
+      window.removeEventListener('beforeunload', handler);
+      clearTimeout(savedTimer);
+    };
+  });
+
+  // A "saved" confirmation stops being true the moment the vault is edited
+  // again - leaving it up next to an "Unsaved changes" pill would be two
+  // messages contradicting each other.
+  $effect(() => {
+    if (dirty) saved = false;
   });
 
   function useGeneratedPassword(generated) {
@@ -93,10 +135,17 @@
 
   async function persist() {
     saveError = '';
+    saved = false;
     saving = true;
     try {
       await saveVault(vaultDocument);
       savedSnapshot = JSON.stringify(vaultDocument);
+      saved = true;
+      // Success confirmations auto-retire; errors never do. A confirmation
+      // has been fully absorbed the moment it's read, whereas an error the
+      // user glanced away from is one they'd have no way to get back.
+      clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => (saved = false), 4000);
     } catch (err) {
       saveError = err.message ?? String(err);
     } finally {
@@ -126,34 +175,56 @@
       {/if}
     </div>
     <div class="toolbar-actions">
-      <button type="button" class="compact" onclick={() => (showChangePassword = !showChangePassword)}>
+      <button
+        type="button"
+        class="compact"
+        aria-expanded={openPanel === 'master-password'}
+        onclick={() => togglePanel('master-password')}
+      >
         Change Master Password
       </button>
-      <button type="button" class="compact" onclick={() => (showChangeLoginPassword = !showChangeLoginPassword)}>
+      <button
+        type="button"
+        class="compact"
+        aria-expanded={openPanel === 'login-password'}
+        onclick={() => togglePanel('login-password')}
+      >
         Change Login Password
       </button>
-      <button type="button" class="compact" onclick={handleSignOut}>Sign out</button>
+      <!-- Danger-outline rather than another neutral button: it's the one
+           control here that ends the session, and with unsaved changes it
+           can lose work (hence the confirm in handleSignOut). Outline, not
+           a solid red - a filled danger button next to the primary "Save
+           vault" would fight it for attention on a screen where signing out
+           is the rarest thing anyone does. -->
+      <button type="button" class="compact danger" onclick={handleSignOut}>Sign out</button>
     </div>
   </div>
 
-  {#if offlineSession}
-    <p class="notice">
+  {#if offlineSession && !offlineNoticeDismissed}
+    <Alert variant="notice" ondismiss={() => (offlineNoticeDismissed = true)}>
       You're viewing an offline copy - changes won't sync until you reconnect and sign in again. Signing back in
       online will replace this view with the latest saved vault, so save anything important elsewhere first if you
       can't reconnect right away.
-    </p>
+    </Alert>
   {/if}
 
   {#if saveError}
-    <p class="error" role="alert">{saveError}</p>
+    <Alert variant="error" ondismiss={() => (saveError = '')}>{saveError}</Alert>
   {/if}
 
-  {#if showChangePassword}
-    <ChangeMasterPasswordForm onclose={() => (showChangePassword = false)} />
+  {#if saved}
+    <Alert variant="success" ondismiss={() => (saved = false)}>
+      Vault saved - encrypted on this device before it was uploaded.
+    </Alert>
   {/if}
 
-  {#if showChangeLoginPassword}
-    <ChangeLoginPasswordForm onclose={() => (showChangeLoginPassword = false)} />
+  {#if openPanel === 'master-password'}
+    <ChangeMasterPasswordForm onclose={() => (openPanel = null)} />
+  {/if}
+
+  {#if openPanel === 'login-password'}
+    <ChangeLoginPasswordForm onclose={() => (openPanel = null)} />
   {/if}
 
   <ul class="entries">
@@ -166,23 +237,44 @@
 
   <form class="add-entry" onsubmit={addEntry}>
     <h2>Add entry</h2>
+    <!-- The manual-save model is the app's other non-obvious behaviour:
+         "Add entry" adds it to the list on screen, but nothing is stored
+         until "Save vault". Without saying so, a user can reasonably add
+         five entries, close the tab, and lose all of them. -->
+    <p class="hint">Adding puts the entry in the list above. Nothing leaves this browser until you press Save vault.</p>
     <label class="field">Title <input bind:value={title} required /></label>
     <label class="field">Username <input bind:value={username} /></label>
     <label class="field">
       Password
       <span class="password-row">
         <input type={showNewPassword ? 'text' : 'password'} bind:value={password} />
-        <button type="button" class="compact" onclick={() => (showNewPassword = !showNewPassword)}>
+        <!-- aria-labels name which form these belong to: an entry's edit
+             form has its own Show/Generate pair and can be open at the same
+             time as this one, which left two different controls sharing an
+             accessible name. Visible text stays short. -->
+        <button
+          type="button"
+          class="compact"
+          aria-label={showNewPassword ? 'Hide new entry password' : 'Show new entry password'}
+          onclick={() => (showNewPassword = !showNewPassword)}
+        >
           {showNewPassword ? 'Hide' : 'Show'}
         </button>
-        <button type="button" class="compact" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
+        <button
+          type="button"
+          class="compact"
+          aria-label="Generate a password for the new entry"
+          onclick={() => (showGenerator = !showGenerator)}
+        >
+          Generate
+        </button>
       </span>
     </label>
     {#if showGenerator}
       <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
     {/if}
     <label class="field">URL <input bind:value={url} /></label>
-    <label class="field">Notes <ResizableTextarea bind:value={notes} /></label>
+    <label class="field">Notes <ResizableTextarea bind:value={notes} label="the new entry's notes" /></label>
     <button type="submit" class="primary">Add entry</button>
   </form>
 </div>

@@ -10,9 +10,13 @@
    * getLastAccount()), so there's nothing else to ask for offline.
    */
   import PasswordField from './PasswordField.svelte';
+  import Alert from './Alert.svelte';
 
   /** @type {{ email: string, onunlock: (detail: { masterPassword: string }) => void, ononline: () => void, loading: boolean }} */
   let { email, onunlock, ononline, loading } = $props();
+
+  // See LoginForm for why fields use explicit for/id + aria-describedby.
+  const uid = $props.id();
 
   let masterPassword = $state('');
 
@@ -22,15 +26,32 @@
   }
 </script>
 
-<div class="offline-banner notice">You're offline - unlocking from the last vault cached on this device.</div>
+<!-- Not dismissible: this describes why the screen looks different, and
+     closing it wouldn't make the device any less offline. -->
+<div class="offline-banner">
+  <Alert variant="notice">You're offline - unlocking from the last vault cached on this device.</Alert>
+</div>
 
 <form onsubmit={submit}>
   <p class="account">Signed in as <strong>{email}</strong></p>
 
-  <label class="field">
-    Master Password
-    <PasswordField bind:value={masterPassword} autocomplete="off" required />
-  </label>
+  <div class="field">
+    <label for="{uid}-master-password">Master Password</label>
+    <PasswordField
+      id="{uid}-master-password"
+      describedby="{uid}-master-password-hint"
+      bind:value={masterPassword} fieldName="Master Password"
+      autocomplete="off"
+      required
+    />
+    <!-- Only one of the two secrets is needed here, which looks like an
+         inconsistency unless it's explained: the login password proves
+         identity to a server this device currently can't reach, while the
+         Master Password decrypts a local copy and needs nobody's help. -->
+    <small id="{uid}-master-password-hint">
+      Your login password isn't needed offline - only the Master Password can unlock the cached copy.
+    </small>
+  </div>
 
   <div class="actions">
     <button type="submit" class="primary" disabled={loading}>{loading ? 'Unlocking…' : 'Unlock vault'}</button>

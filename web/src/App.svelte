@@ -5,6 +5,7 @@
   import ForgotPasswordForm from './lib/components/ForgotPasswordForm.svelte';
   import OfflineUnlockForm from './lib/components/OfflineUnlockForm.svelte';
   import VaultView from './lib/components/VaultView.svelte';
+  import Alert from './lib/components/Alert.svelte';
   import {
     signInAndUnlock,
     unlockOffline,
@@ -191,16 +192,24 @@
     </h1>
   </header>
 
+  <!-- Every message here is dismissible, because every one describes an
+       event the user can acknowledge ("that sign-in failed", "you were
+       locked out while away"). The one message that isn't dismissible is
+       the never-signed-in-offline error below: closing it wouldn't make it
+       stop being true, and there'd be nothing left on screen to explain the
+       empty page. -->
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <Alert variant="error" ondismiss={() => (error = '')}>{error}</Alert>
   {/if}
 
   {#if lockedByInactivity && !vaultDocument}
-    <p class="notice">Locked after a period of inactivity - sign in again to continue.</p>
+    <Alert variant="notice" ondismiss={() => (lockedByInactivity = false)}>
+      Locked after a period of inactivity - sign in again to continue.
+    </Alert>
   {/if}
 
   {#if notice && !vaultDocument}
-    <p class="notice">{notice}</p>
+    <Alert variant="notice" ondismiss={() => (notice = '')}>{notice}</Alert>
   {/if}
 
   {#if vaultDocument}
@@ -218,10 +227,10 @@
           {loading}
         />
       {:else if !online}
-        <p class="error" role="alert">
+        <Alert variant="error">
           You're offline, and this device has never signed in to Small Stash before - connect to the internet to sign
           in for the first time.
-        </p>
+        </Alert>
       {:else if authMode === 'signup'}
         <SignupForm oncomplete={handleSignupComplete} oncancel={() => switchAuthMode('login')} />
       {:else if authMode === 'forgot-password'}

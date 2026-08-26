@@ -22,6 +22,11 @@
   /** @type {{ entry: { id: string, title: string, username: string, password: string, url: string, notes: string }, onremove: () => void, onupdate: (updated: object) => void }} */
   let { entry, onremove, onupdate } = $props();
 
+  // How this entry is referred to in the accessible names of its own
+  // controls. Matches what the summary row displays, so what a screen
+  // reader announces and what's on screen agree.
+  let entryLabel = $derived(entry.title || '(untitled)');
+
   let expanded = $state(false);
   let showPassword = $state(false);
   let copied = $state(false);
@@ -118,7 +123,7 @@
       <span class="entry-title"><strong>{entry.title || '(untitled)'}</strong></span>
       <span class="entry-username">{entry.username}</span>
     </button>
-    <button type="button" class="delete compact" onclick={handleRemove} aria-label="Delete entry" disabled={editing}>
+    <button type="button" class="delete compact" onclick={handleRemove} aria-label="Delete {entryLabel}" disabled={editing}>
       ✕
     </button>
   </div>
@@ -169,17 +174,33 @@
         Password
         <span class="password-row">
           <input type={showPassword ? 'text' : 'password'} bind:value={editPassword} />
-          <button type="button" class="compact" onclick={() => (showPassword = !showPassword)}>
+          <!-- Named after the entry: the always-present add-entry form has
+               its own Show/Generate pair, so without this two different
+               controls share one accessible name whenever an entry is being
+               edited. -->
+          <button
+            type="button"
+            class="compact"
+            aria-label="{showPassword ? 'Hide' : 'Show'} password for {entryLabel}"
+            onclick={() => (showPassword = !showPassword)}
+          >
             {showPassword ? 'Hide' : 'Show'}
           </button>
-          <button type="button" class="compact" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
+          <button
+            type="button"
+            class="compact"
+            aria-label="Generate a password for {entryLabel}"
+            onclick={() => (showGenerator = !showGenerator)}
+          >
+            Generate
+          </button>
         </span>
       </label>
       {#if showGenerator}
         <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
       {/if}
       <label class="field">URL <input bind:value={editUrl} /></label>
-      <label class="field">Notes <ResizableTextarea bind:value={editNotes} /></label>
+      <label class="field">Notes <ResizableTextarea bind:value={editNotes} label="the notes for {entryLabel}" /></label>
       <div class="row">
         <button type="submit" class="primary compact">Save</button>
         <button type="button" class="compact" onclick={cancelEdit}>Cancel</button>
