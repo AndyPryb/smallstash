@@ -47,10 +47,14 @@ test.describe('Change Login Password - negative case', () => {
     // elsewhere in this suite.
     await page.getByLabel(/^New login password/i).fill('weak');
     await page.getByLabel(/^Confirm new login password/i).fill('weak');
-    // exact + this exact casing to disambiguate from the toolbar's toggle
-    // button, "Change Login Password" (capital L) - a different string by
-    // exact/case-sensitive match, not just a different element.
-    await page.getByRole('button', { name: 'Change login password', exact: true }).click();
+    // The submit button is "Update login password" - a genuinely different
+    // string from the toolbar toggle that opened this panel ("Change Login
+    // Password"), so this no longer relies on capitalisation alone to tell
+    // the two apart the way it used to. Renamed 2026-08-26 precisely
+    // because a casing-only distinction is one styling tweak away from
+    // breaking silently, and the equivalent pair on the Master Password
+    // panel was byte-identical with no way to disambiguate at all.
+    await page.getByRole('button', { name: 'Update login password', exact: true }).click();
 
     const error = page.getByRole('alert');
     await expect(error).toBeVisible({ timeout: 15000 });

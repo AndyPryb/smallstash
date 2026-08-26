@@ -18,8 +18,15 @@
    * duplicating the drag math.
    */
 
-  /** @type {{ value: string, rows?: number }} */
-  let { value = $bindable(''), rows = 3 } = $props();
+  /**
+   * `label` names which field this handle resizes. Both places a Notes field
+   * exists (the add-entry form and an entry's edit form) can be on screen at
+   * the same time, so a fixed "Drag to resize this field" gave two different
+   * controls the same accessible name.
+   *
+   * @type {{ value: string, rows?: number, label?: string }}
+   */
+  let { value = $bindable(''), rows = 3, label = 'this field' } = $props();
 
   let textareaEl;
   let dragging = $state(false);
@@ -56,7 +63,7 @@
     type="button"
     class="resize-handle"
     class:dragging
-    aria-label="Drag to resize this field"
+    aria-label="Drag to resize {label}"
     onpointerdown={startResize}
     onpointermove={onResize}
     onpointerup={endResize}

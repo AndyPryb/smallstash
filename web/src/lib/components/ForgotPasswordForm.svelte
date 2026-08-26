@@ -11,10 +11,16 @@
    */
   import { requestLoginPasswordReset, confirmLoginPasswordReset } from '../session.js';
   import { friendlyAuthErrorMessage } from '../errors.js';
+  import { LOGIN_PASSWORD_RULES } from '../policy.js';
   import PasswordField from './PasswordField.svelte';
+  import PasswordRequirements from './PasswordRequirements.svelte';
+  import Alert from './Alert.svelte';
 
   /** @type {{ oncomplete: () => void, oncancel: () => void }} */
   let { oncomplete, oncancel } = $props();
+
+  // See LoginForm for why fields use explicit for/id + aria-describedby.
+  const uid = $props.id();
 
   /** @type {'request' | 'confirm'} */
   let step = $state('request');
@@ -63,16 +69,24 @@
 </script>
 
 {#if error}
-  <p class="error" role="alert">{error}</p>
+  <Alert variant="error" ondismiss={() => (error = '')}>{error}</Alert>
 {/if}
 
 {#if step === 'request'}
   <form onsubmit={submitRequest}>
     <p class="lead">Enter your account email and we'll send a verification code to reset your login password.</p>
-    <label class="field">
-      Email
-      <input type="email" bind:value={email} autocomplete="username" required />
-    </label>
+    <!-- The single most important thing to say on this screen. A user who
+         has forgotten their login password may well assume this resets
+         everything, try it, and then find their vault still locked with no
+         idea why. -->
+    <Alert variant="notice">
+      This resets your <strong>login password</strong> only. Your Master Password and everything in your vault are
+      untouched - you'll still need your Master Password to unlock it afterwards.
+    </Alert>
+    <div class="field">
+      <label for="{uid}-email">Email</label>
+      <input id="{uid}-email" type="email" bind:value={email} autocomplete="username" required />
+    </div>
     <div class="actions">
       <button type="submit" class="primary" disabled={busy}>{busy ? 'Sending…' : 'Send code'}</button>
       <button type="button" onclick={oncancel} disabled={busy}>Back to sign in</button>
@@ -81,19 +95,32 @@
 {:else}
   <form onsubmit={submitConfirm}>
     <p class="lead">We emailed a verification code to <strong>{email}</strong>.</p>
-    <label class="field">
-      Verification code
-      <input class="code-input" bind:value={code} autocomplete="one-time-code" required />
-    </label>
-    <label class="field">
-      New login password
-      <PasswordField bind:value={newPassword} autocomplete="new-password" required />
-      <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
-    </label>
-    <label class="field">
-      Confirm new login password
-      <PasswordField bind:value={confirmNewPassword} autocomplete="new-password" required />
-    </label>
+    <div class="field">
+      <label for="{uid}-code">Verification code</label>
+      <input
+        id="{uid}-code"
+        aria-describedby="{uid}-code-hint"
+        class="code-input"
+        bind:value={code}
+        autocomplete="one-time-code"
+        required
+      />
+      <small id="{uid}-code-hint">If it hasn't arrived in a minute or two, check your spam folder - these emails often land there.</small>
+    </div>
+    <div class="field">
+      <label for="{uid}-new-password">New login password</label>
+      <PasswordField id="{uid}-new-password" bind:value={newPassword} fieldName="new login password" autocomplete="new-password" required />
+    </div>
+    <PasswordRequirements value={newPassword} rules={LOGIN_PASSWORD_RULES} />
+    <div class="field">
+      <label for="{uid}-confirm-new-password">Confirm new login password</label>
+      <PasswordField
+        id="{uid}-confirm-new-password"
+        bind:value={confirmNewPassword} fieldName="new login password confirmation"
+        autocomplete="new-password"
+        required
+      />
+    </div>
     <div class="actions">
       <button type="submit" class="primary" disabled={busy}>{busy ? 'Resetting…' : 'Reset password'}</button>
       <button type="button" onclick={oncancel} disabled={busy}>Back to sign in</button>

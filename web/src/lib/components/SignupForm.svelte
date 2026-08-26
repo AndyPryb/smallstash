@@ -15,12 +15,24 @@
     confirmAccount,
     signUpAndInitializeVault,
   } from '../session.js';
-  import { validateMasterPassword, MIN_MASTER_PASSWORD_LENGTH } from '../policy.js';
+  import {
+    validateMasterPassword,
+    validateLoginPassword,
+    LOGIN_PASSWORD_RULES,
+    MASTER_PASSWORD_RULES,
+  } from '../policy.js';
   import { friendlyAuthErrorMessage } from '../errors.js';
   import PasswordField from './PasswordField.svelte';
+  import PasswordRequirements from './PasswordRequirements.svelte';
+  import TwoSecretsExplainer from './TwoSecretsExplainer.svelte';
+  import Alert from './Alert.svelte';
 
   /** @type {{ oncomplete: (detail: { vaultDocument: object }) => void, oncancel: () => void }} */
   let { oncomplete, oncancel } = $props();
+
+  // See LoginForm for why fields use explicit for/id + aria-describedby
+  // instead of a wrapping <label>.
+  const uid = $props.id();
 
   /** @type {'register' | 'confirm' | 'recovery'} */
   let step = $state('register');
@@ -49,12 +61,12 @@
     }
   }
 
-  // Client-side pre-check only, mirroring the Cognito pool's actual policy
-  // (infra/.../SmallstashStack.java: minLength 12 + upper/lower/digit/symbol)
-  // - Cognito's own rejection is still the real enforcement; this just gives
-  // faster feedback than a round trip.
-  const LOGIN_PASSWORD_PATTERN =
-    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,}$/;
+  // The client-side pre-check moved to policy.js's validateLoginPassword,
+  // which is built from the same LOGIN_PASSWORD_RULES the live checklist
+  // renders - so the rules a user sees ticking off and the rules that reject
+  // the form can't drift apart. Same policy, same message as the inline
+  // regex this replaced; Cognito's own rejection is still the real
+  // enforcement.
 
   async function submitRegister(event) {
     event.preventDefault();
@@ -64,8 +76,9 @@
       error = 'Login passwords do not match';
       return;
     }
-    if (!LOGIN_PASSWORD_PATTERN.test(loginPassword)) {
-      error = 'Login password needs 12+ characters with upper, lower, a digit, and a symbol';
+    const loginPasswordError = validateLoginPassword(loginPassword);
+    if (loginPasswordError) {
+      error = loginPasswordError;
       return;
     }
     if (masterPassword !== confirmMasterPassword) {
@@ -122,14 +135,22 @@
 </script>
 
 {#if error}
-  <p class="error" role="alert">{error}</p>
+  <Alert variant="error" ondismiss={() => (error = '')}>{error}</Alert>
 {/if}
 
 {#if step === 'register'}
   <form onsubmit={submitRegister}>
-    <label class="field">
-      Invite code
+    <!-- Open by default here, unlike the sign-in screen. This is the user's
+         first encounter with the two-secret model, and the choice they're
+         about to make (a Master Password nobody can reset) is irreversible -
+         so the explanation is shown rather than offered. -->
+    <TwoSecretsExplainer open />
+
+    <div class="field">
+      <label for="{uid}-invite">Invite code</label>
       <input
+        id="{uid}-invite"
+        aria-describedby="{uid}-invite-hint"
         bind:value={inviteCode}
         autocomplete="off"
         autocapitalize="off"
@@ -137,35 +158,62 @@
         spellcheck="false"
         required
       />
-      <small>Small Stash is invite-only. Ask whoever runs this instance for a code.</small>
-    </label>
+      <small id="{uid}-invite-hint">Small Stash is invite-only. Ask whoever runs this instance for a code.</small>
+    </div>
 
-    <label class="field">
-      Email
-      <input type="email" bind:value={email} autocomplete="username" required />
-    </label>
+    <div class="field">
+      <label for="{uid}-email">Email</label>
+      <input id="{uid}-email" type="email" bind:value={email} autocomplete="username" required />
+    </div>
 
-    <label class="field">
-      Login password
-      <PasswordField bind:value={loginPassword} autocomplete="new-password" required />
-      <small>12+ characters, upper + lower case, a digit, and a symbol.</small>
-    </label>
-    <label class="field">
-      Confirm login password
-      <PasswordField bind:value={confirmLoginPassword} autocomplete="new-password" required />
-    </label>
+    <div class="field">
+      <label for="{uid}-login-password">Login password</label>
+      <PasswordField
+        id="{uid}-login-password"
+        describedby="{uid}-login-password-hint"
+        bind:value={loginPassword} fieldName="login password"
+        autocomplete="new-password"
+        required
+      />
+      <small id="{uid}-login-password-hint">This is the one you'll type to sign in, and the one you can reset by email.</small>
+    </div>
+    <PasswordRequirements value={loginPassword} rules={LOGIN_PASSWORD_RULES} />
+    <div class="field">
+      <label for="{uid}-confirm-login-password">Confirm login password</label>
+      <PasswordField
+        id="{uid}-confirm-login-password"
+        bind:value={confirmLoginPassword} fieldName="login password confirmation"
+        autocomplete="new-password"
+        required
+      />
+    </div>
 
     <hr />
 
-    <label class="field">
-      Master Password
-      <PasswordField bind:value={masterPassword} autocomplete="off" required />
-      <small>Encrypts your vault. Never sent to the server - keep it different from your login password, and don't lose it (that's what the Recovery Key on the next screen is for). At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
-    </label>
-    <label class="field">
-      Confirm Master Password
-      <PasswordField bind:value={confirmMasterPassword} autocomplete="off" required />
-    </label>
+    <div class="field">
+      <label for="{uid}-master-password">Master Password</label>
+      <PasswordField
+        id="{uid}-master-password"
+        describedby="{uid}-master-password-hint"
+        bind:value={masterPassword} fieldName="Master Password"
+        autocomplete="off"
+        required
+      />
+      <small id="{uid}-master-password-hint">
+        This is the key to your vault. It never leaves your device, so make it something you'll remember - and make it
+        different from your login password, so that losing one doesn't lose both.
+      </small>
+    </div>
+    <PasswordRequirements value={masterPassword} rules={MASTER_PASSWORD_RULES} />
+    <div class="field">
+      <label for="{uid}-confirm-master-password">Confirm Master Password</label>
+      <PasswordField
+        id="{uid}-confirm-master-password"
+        bind:value={confirmMasterPassword} fieldName="Master Password confirmation"
+        autocomplete="off"
+        required
+      />
+    </div>
 
     <div class="actions">
       <button type="submit" class="primary" disabled={busy}>{busy ? 'Creating account…' : 'Create account'}</button>
@@ -174,22 +222,60 @@
   </form>
 {:else if step === 'confirm'}
   <form onsubmit={submitConfirm}>
-    <p>We emailed a verification code to <strong>{email}</strong>.</p>
-    <label class="field">
-      Verification code
-      <input class="code-input" inputmode="numeric" autocomplete="one-time-code" bind:value={code} required />
-    </label>
+    <p class="lead">We emailed a verification code to <strong>{email}</strong>.</p>
+    <div class="field">
+      <label for="{uid}-code">Verification code</label>
+      <input
+        id="{uid}-code"
+        aria-describedby="{uid}-code-hint"
+        class="code-input"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        bind:value={code}
+        required
+      />
+      <!-- Known deliverability problem, not a guess: Cognito's default
+           sender has poor reputation and these land in spam regularly (see
+           docs/todo.md, "Cognito signup/verification emails land in spam").
+           Until that's fixed with SES, saying so up front saves the user
+           concluding the app is broken. -->
+      <small id="{uid}-code-hint">If it hasn't arrived in a minute or two, check your spam folder - these emails often land there.</small>
+    </div>
     <div class="actions">
       <button type="submit" class="primary" disabled={busy}>{busy ? 'Verifying…' : 'Verify and continue'}</button>
     </div>
   </form>
 {:else if step === 'recovery'}
   <div class="recovery">
-    <p><strong>Save this Recovery Key now.</strong> It's the only way back into your vault if you forget your Master Password - it is shown here once and never stored anywhere, by you or by Small Stash.</p>
+    <h2>Save your Recovery Key</h2>
+    <p class="lead">
+      This is your spare key. If you ever forget your Master Password, this is the <strong>only</strong> way back into
+      your vault - there is no "reset my Master Password" email, because Small Stash has nothing on its side to reset
+      it from.
+    </p>
+
     <code class="recovery-key">{recoveryKey}</code>
+
     <div class="actions">
       <button type="button" onclick={copyRecoveryKey}>{recoveryKeyCopied ? 'Copied!' : 'Copy'}</button>
     </div>
+
+    <!-- Concrete instructions, not just "keep it safe". Told to store
+         something securely with no examples, people paste it into a note
+         on the same device they'd lose. -->
+    <div class="where-to-put-it">
+      <p class="where-label">Good places to keep it:</p>
+      <ul>
+        <li>Printed on paper, somewhere you keep important documents</li>
+        <li>In a different password manager, or written in a physical notebook</li>
+        <li>Anywhere you'd still reach it if this device were lost or stolen</li>
+      </ul>
+      <p class="where-warning">
+        It is shown here once and stored nowhere - not by Small Stash, not in this browser. Once you continue, it's gone
+        from the screen for good.
+      </p>
+    </div>
+
     <label class="confirm-saved">
       <input type="checkbox" bind:checked={recoveryKeySaved} />
       I've saved this Recovery Key somewhere safe
@@ -208,6 +294,22 @@
     display: flex;
     flex-direction: column;
     gap: var(--ss-space-4);
+  }
+
+  h2 {
+    font-size: var(--ss-text-lg);
+  }
+
+  /* Explanatory sentence above a step - muted so it reads as context rather
+     than competing with the field labels for first attention. */
+  .lead {
+    color: var(--ss-text-muted);
+    font-size: var(--ss-text-sm);
+    line-height: 1.6;
+  }
+
+  .lead strong {
+    color: var(--ss-text);
   }
 
   .actions {
@@ -258,6 +360,38 @@
     /* Selectable by design - "Copy" can fail when the clipboard API is
        blocked, and hand-selecting the text is the documented fallback. */
     user-select: all;
+  }
+
+  .where-to-put-it {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-2);
+    padding: var(--ss-space-4);
+    background: var(--ss-surface-raised);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-md);
+    font-size: var(--ss-text-sm);
+    color: var(--ss-text-muted);
+    line-height: 1.6;
+  }
+
+  .where-label {
+    color: var(--ss-text);
+    font-weight: 600;
+  }
+
+  .where-to-put-it ul {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-1);
+    margin: 0;
+    padding-left: var(--ss-space-4);
+  }
+
+  .where-warning {
+    padding-top: var(--ss-space-2);
+    border-top: 1px solid var(--ss-border);
+    color: var(--ss-warn-text);
   }
 
   .confirm-saved {

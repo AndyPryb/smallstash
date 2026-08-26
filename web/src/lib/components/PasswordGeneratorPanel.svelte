@@ -1,5 +1,6 @@
 <script>
   import { generatePassword } from '../generator.js';
+  import Alert from './Alert.svelte';
 
   /** @type {{ onuse: (password: string) => void, onclose: () => void }} */
   let { onuse, onclose } = $props();
@@ -50,7 +51,7 @@
   <h2>Generate password</h2>
 
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <Alert variant="error" ondismiss={() => (error = '')}>{error}</Alert>
   {/if}
 
   <code class="preview">{password}</code>
