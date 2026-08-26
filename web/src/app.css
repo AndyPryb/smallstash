@@ -1,0 +1,448 @@
+/**
+ * Small Stash design tokens + global base styles.
+ *
+ * Why a global stylesheet at all, when everything else here is Svelte
+ * scoped CSS: before this file, every component re-declared its own
+ * padding/font-size/colour for the same controls (nine copies of the
+ * button rule, six of the `.error` box), and they had already drifted -
+ * buttons were 0.6rem in the auth forms and 0.3rem/0.85rem inside an
+ * entry, with no shared idea of a spacing or type scale. Tokens here,
+ * layout in the components.
+ *
+ * Loaded from main.js, so Vite emits it as an external <link href> in the
+ * built HTML - not an inline <style>. That matters: the deployed CSP is
+ * `style-src 'self'` with no 'unsafe-inline' (infra/.../SmallstashStack.java),
+ * so an inline style block or a `style=""` attribute in markup would be
+ * blocked outright. Dynamic sizing must go through the CSSOM
+ * (`el.style.height = ...`, as ResizableTextarea.svelte does) rather than a
+ * style attribute in the template.
+ *
+ * Fonts are the system stack for the same reason - `font-src 'self'` means
+ * no Google Fonts, and a self-hosted webfont would be a real payload cost
+ * for a vault app that should unlock fast.
+ */
+
+:root {
+  /* --- Elevation ladder -------------------------------------------------
+     Dark UIs read depth through lightness, not shadow, so surfaces step up
+     as they come forward: canvas -> card -> input/secondary button ->
+     hover. Kept deliberately close together; big jumps look like unrelated
+     panels rather than one app. */
+  --ss-canvas: #0f1317;
+  --ss-surface: #171c22;
+  --ss-surface-raised: #1e242c;
+  --ss-surface-hover: #262e37;
+  --ss-surface-sunken: #12161a;
+
+  --ss-border: #2a323b;
+  --ss-border-strong: #3b4652;
+
+  --ss-text: #e7edf3;
+  --ss-text-muted: #98a4b1;
+  --ss-text-faint: #6d7883;
+
+  /* --- Accent -----------------------------------------------------------
+     Teal, carried over from the old link colour (#5ac8a8) and brightened
+     for AA contrast on the darker canvas. Reserved for the single primary
+     action per view and for focus - if everything is teal, nothing is. */
+  --ss-accent: #3ecfa4;
+  --ss-accent-hover: #57e0b8;
+  --ss-accent-quiet: #1f6f59;
+  --ss-on-accent: #04211a;
+
+  /* Brand tan, from the Small Stash pouch glyph. Identity only - never an
+     interactive colour, so it can't be confused with an action. */
+  --ss-brand: #c9a66b;
+
+  /* --- Semantic ---------------------------------------------------------
+     Each is a triple (surface / border / text) so the alert boxes below and
+     any future status chip stay consistent instead of hand-mixing hexes. */
+  --ss-danger-surface: #2a1418;
+  --ss-danger-border: #5e2730;
+  --ss-danger-text: #ffb3b9;
+  --ss-danger-solid: #e0566a;
+
+  --ss-warn-surface: #2a2210;
+  --ss-warn-border: #5c4a1e;
+  --ss-warn-text: #f3d78c;
+
+  --ss-success-surface: #0f2a1d;
+  --ss-success-border: #255f41;
+  --ss-success-text: #8ceab5;
+
+  /* --- Type -------------------------------------------------------------
+     A 4-step scale instead of the previous ad-hoc mix of 0.85/0.9/1/1.1rem.
+     16px base on inputs is not a style choice: below it, iOS Safari zooms
+     the viewport on focus. */
+  --ss-font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --ss-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --ss-text-xs: 0.75rem;
+  --ss-text-sm: 0.8125rem;
+  --ss-text-base: 0.9375rem;
+  --ss-text-lg: 1.0625rem;
+  --ss-text-xl: 1.375rem;
+
+  /* --- Space ------------------------------------------------------------
+     4px base grid. Every margin/gap/padding in the app should be one of
+     these, which is most of what makes a grown-feature-by-feature UI start
+     looking deliberate. */
+  --ss-space-1: 0.25rem;
+  --ss-space-2: 0.5rem;
+  --ss-space-3: 0.75rem;
+  --ss-space-4: 1rem;
+  --ss-space-5: 1.5rem;
+  --ss-space-6: 2rem;
+  --ss-space-7: 3rem;
+
+  --ss-radius-sm: 6px;
+  --ss-radius-md: 10px;
+  --ss-radius-lg: 14px;
+  --ss-radius-pill: 999px;
+
+  --ss-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ss-shadow-2: 0 10px 30px -12px rgba(0, 0, 0, 0.65);
+
+  /* Focus is a ring plus a colour change, never a colour change alone -
+     the old UI styled no focus state at all and relied on the UA default,
+     which is invisible against a dark background in several browsers. */
+  --ss-ring: 0 0 0 3px rgba(62, 207, 164, 0.32);
+  --ss-ring-danger: 0 0 0 3px rgba(224, 86, 106, 0.32);
+
+  /* Minimum interactive height. 44px is the Android/iOS touch-target
+     guideline; controls may be wider but never shorter. */
+  --ss-control-height: 44px;
+  --ss-control-height-sm: 36px;
+}
+
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--ss-canvas);
+  /* Two very low-opacity accent washes bled in from the top corners - stops
+     a full-bleed dark page reading as flat black without introducing a
+     second background colour anyone has to reason about. */
+  background-image:
+    radial-gradient(120% 80% at 12% -10%, rgba(62, 207, 164, 0.07), transparent 60%),
+    radial-gradient(90% 70% at 100% 0%, rgba(201, 166, 107, 0.05), transparent 55%);
+  background-attachment: fixed;
+  color: var(--ss-text);
+  font-family: var(--ss-font);
+  font-size: var(--ss-text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* One focus treatment for every control in the app. :focus-visible rather
+   than :focus so a mouse click on a button doesn't leave a ring behind. */
+:focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 2px;
+  border-radius: var(--ss-radius-sm);
+}
+
+/* --- Form controls ------------------------------------------------------
+   Element-level so components stop re-declaring padding/font-size on every
+   input. Svelte's scoped rules are more specific than these (the compiler
+   appends its hash class), so a component that genuinely needs something
+   different can still override locally without fighting load order. */
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+}
+
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+textarea {
+  width: 100%;
+  min-height: var(--ss-control-height);
+  padding: 0 var(--ss-space-3);
+  /* Indirected through --ss-field-bg so a container that is itself sunken
+     (an entry's edit form) can step its fields back up without having to
+     re-declare the rule - and, because custom properties inherit across
+     component boundaries, that also reaches inputs rendered by a child
+     component it can't select into, like ResizableTextarea's <textarea>. */
+  background: var(--ss-field-bg, var(--ss-surface-sunken));
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  color: var(--ss-text);
+  /* 1rem, not the smaller body size - see the iOS zoom note above. */
+  font-size: 1rem;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+textarea {
+  min-height: 5.5rem;
+  padding: var(--ss-space-3);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+input:not([type='checkbox']):not([type='radio']):not([type='range']):hover,
+textarea:hover {
+  border-color: var(--ss-border-strong);
+}
+
+input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--ss-accent);
+  background: var(--ss-canvas);
+  box-shadow: var(--ss-ring);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ss-text-faint);
+}
+
+/* Checkboxes ship ~13px by default, well under any touch guideline, and
+   accent-color is the one-line way to theme them without rebuilding the
+   control from scratch. */
+input[type='checkbox'] {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+  accent-color: var(--ss-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+input[type='range'] {
+  width: 100%;
+  height: var(--ss-control-height-sm);
+  margin: 0;
+  padding: 0;
+  accent-color: var(--ss-accent);
+  cursor: pointer;
+}
+
+/* --- Buttons ------------------------------------------------------------
+   Default (bare `<button>`) is the *secondary* style, because the app has
+   far more secondary actions than primary ones and that keeps the common
+   case free of a class. `.primary`, `.danger`, `.ghost`, `.link` and
+   `.compact` are the variants; at most one primary per view. */
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ss-space-2);
+  min-height: var(--ss-control-height);
+  padding: 0 var(--ss-space-4);
+  background: var(--ss-surface-raised);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  color: var(--ss-text);
+  font-size: var(--ss-text-base);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease,
+    box-shadow 120ms ease, transform 60ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--ss-surface-hover);
+  border-color: var(--ss-border-strong);
+}
+
+button:active:not(:disabled) {
+  /* Sub-pixel nudge - reads as a press without moving neighbouring layout. */
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--ss-accent);
+  border-color: var(--ss-accent);
+  color: var(--ss-on-accent);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--ss-accent-hover);
+  border-color: var(--ss-accent-hover);
+}
+
+button.danger {
+  background: transparent;
+  border-color: var(--ss-danger-border);
+  color: var(--ss-danger-text);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--ss-danger-surface);
+  border-color: var(--ss-danger-solid);
+}
+
+button.danger:focus-visible {
+  outline-color: var(--ss-danger-solid);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ss-text-muted);
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--ss-surface-raised);
+  border-color: var(--ss-border);
+  color: var(--ss-text);
+}
+
+/* Inline text button that reads as a link (mode switches, "Create one").
+   Still a real <button> for semantics - only the paint changes. */
+button.link {
+  min-height: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--ss-accent);
+  font-size: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.link:hover:not(:disabled) {
+  background: none;
+  border-color: transparent;
+  color: var(--ss-accent-hover);
+}
+
+/* Dense variant for buttons that sit inside a row of an entry, where a
+   full 44px control would dominate the content it acts on. Still 36px, so
+   it stays a usable touch target. */
+button.compact {
+  min-height: var(--ss-control-height-sm);
+  padding: 0 var(--ss-space-3);
+  font-size: var(--ss-text-sm);
+}
+
+/* --- Typography ---------------------------------------------------------- */
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+a {
+  color: var(--ss-accent);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: var(--ss-font-mono);
+}
+
+/* --- Shared blocks ------------------------------------------------------
+   `.error`, `.notice` and `.success` were duplicated, near-identically, in
+   six components. Global here, deleted there. Svelte only rewrites
+   selectors inside a component's own <style>, so these still match markup
+   that carries `class="error"` alongside the compiler's scoping class. */
+
+.error,
+.notice,
+.success {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ss-space-2);
+  padding: var(--ss-space-3) var(--ss-space-4);
+  border: 1px solid;
+  border-radius: var(--ss-radius-md);
+  font-size: var(--ss-text-base);
+}
+
+.error {
+  background: var(--ss-danger-surface);
+  border-color: var(--ss-danger-border);
+  color: var(--ss-danger-text);
+}
+
+.notice {
+  background: var(--ss-warn-surface);
+  border-color: var(--ss-warn-border);
+  color: var(--ss-warn-text);
+}
+
+.success {
+  background: var(--ss-success-surface);
+  border-color: var(--ss-success-border);
+  color: var(--ss-success-text);
+}
+
+/* Field label + hint pairing, used by every form. The label is the small,
+   muted, slightly-tracked line above a control; the hint is smaller again
+   and never carries meaning the label doesn't. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ss-space-2);
+  font-size: var(--ss-text-sm);
+  font-weight: 500;
+  color: var(--ss-text-muted);
+  letter-spacing: 0.01em;
+}
+
+.field small,
+.hint {
+  color: var(--ss-text-faint);
+  font-size: var(--ss-text-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.45;
+}
+
+/* Horizontal rule used inside forms to separate the two independent
+   secrets (login password vs Master Password). Browser-default hr gets
+   `margin-inline: auto`, which beats `align-items: stretch` in a flex
+   column and collapses it to a centred zero-width dot - hence the explicit
+   reset, previously repeated in three components. */
+hr {
+  width: 100%;
+  height: 1px;
+  margin: var(--ss-space-1) 0;
+  border: none;
+  background: var(--ss-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

@@ -112,17 +112,28 @@
   }
 </script>
 
-<div>
+<div class="vault">
   <div class="toolbar">
-    <button type="button" onclick={persist} disabled={saving}>{saving ? 'Saving…' : 'Save vault'}</button>
-    {#if dirty}
-      <span class="dirty-indicator" role="status">Unsaved changes</span>
-    {/if}
-    <button type="button" onclick={() => (showChangePassword = !showChangePassword)}>Change Master Password</button>
-    <button type="button" onclick={() => (showChangeLoginPassword = !showChangeLoginPassword)}>
-      Change Login Password
-    </button>
-    <button type="button" onclick={handleSignOut}>Sign out</button>
+    <!-- Saving is the one action with consequences here, so it's the only
+         primary and it's separated from the account/settings actions rather
+         than sitting fourth in an undifferentiated row of five buttons. -->
+    <div class="toolbar-primary">
+      <button type="button" class="primary" onclick={persist} disabled={saving}>
+        {saving ? 'Saving…' : 'Save vault'}
+      </button>
+      {#if dirty}
+        <span class="dirty-indicator" role="status">Unsaved changes</span>
+      {/if}
+    </div>
+    <div class="toolbar-actions">
+      <button type="button" class="compact" onclick={() => (showChangePassword = !showChangePassword)}>
+        Change Master Password
+      </button>
+      <button type="button" class="compact" onclick={() => (showChangeLoginPassword = !showChangeLoginPassword)}>
+        Change Login Password
+      </button>
+      <button type="button" class="compact" onclick={handleSignOut}>Sign out</button>
+    </div>
   </div>
 
   {#if offlineSession}
@@ -153,104 +164,149 @@
     {/each}
   </ul>
 
-  <form onsubmit={addEntry}>
+  <form class="add-entry" onsubmit={addEntry}>
     <h2>Add entry</h2>
-    <label>Title <input bind:value={title} required /></label>
-    <label>Username <input bind:value={username} /></label>
-    <label>
+    <label class="field">Title <input bind:value={title} required /></label>
+    <label class="field">Username <input bind:value={username} /></label>
+    <label class="field">
       Password
       <span class="password-row">
         <input type={showNewPassword ? 'text' : 'password'} bind:value={password} />
-        <button type="button" onclick={() => (showNewPassword = !showNewPassword)}>
+        <button type="button" class="compact" onclick={() => (showNewPassword = !showNewPassword)}>
           {showNewPassword ? 'Hide' : 'Show'}
         </button>
-        <button type="button" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
+        <button type="button" class="compact" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
       </span>
     </label>
     {#if showGenerator}
       <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
     {/if}
-    <label>URL <input bind:value={url} /></label>
-    <label>Notes <ResizableTextarea bind:value={notes} /></label>
-    <button type="submit">Add entry</button>
+    <label class="field">URL <input bind:value={url} /></label>
+    <label class="field">Notes <ResizableTextarea bind:value={notes} /></label>
+    <button type="submit" class="primary">Add entry</button>
   </form>
 </div>
 
 <style>
+  /* Control, field, and `.error`/`.notice` styling comes from src/app.css. */
+  .vault {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-4);
+  }
+
+  /**
+   * Sticky action bar. "Save vault" is the one thing a user must not have
+   * to hunt for after editing a long list, and previously it scrolled away
+   * with the top of the page. The bar keeps the canvas colour behind it so
+   * entries don't show through as they scroll under.
+   */
   .toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
+    justify-content: space-between;
     flex-wrap: wrap;
+    gap: var(--ss-space-3);
+    padding: var(--ss-space-3) 0;
+    background: var(--ss-canvas);
+    border-bottom: 1px solid var(--ss-border);
   }
+
+  .toolbar-primary,
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+  }
+
+  /* A status pill rather than bare amber text - "Unsaved changes" is a
+     state, and reads as one next to the button that clears it. */
   .dirty-indicator {
-    font-size: 0.85rem;
-    color: #f0d68a;
+    padding: var(--ss-space-1) var(--ss-space-3);
+    background: var(--ss-warn-surface);
+    border: 1px solid var(--ss-warn-border);
+    border-radius: var(--ss-radius-pill);
+    color: var(--ss-warn-text);
+    font-size: var(--ss-text-xs);
+    font-weight: 500;
+    white-space: nowrap;
   }
+
+  /* Entries are cards in a stack, not rows separated by hairlines - each
+     one expands to a details panel, and a card makes the boundary between
+     "this entry" and "the next entry" obvious while expanded. */
   .entries {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-2);
     list-style: none;
     padding: 0;
-    margin: 0 0 1.5rem;
+    margin: 0;
   }
-  .entries li {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #333;
-  }
+
+  /* Dashed, muted, centred - reads as an absent list rather than a broken
+     one, and doesn't imitate a real entry card. */
   .entries li.empty {
-    color: #888;
-    border-bottom: none;
+    padding: var(--ss-space-6) var(--ss-space-4);
+    border: 1px dashed var(--ss-border-strong);
+    border-radius: var(--ss-radius-lg);
+    color: var(--ss-text-muted);
+    text-align: center;
   }
-  form {
+
+  .add-entry {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    max-width: 360px;
+    gap: var(--ss-space-4);
+    /* Full width, dropping the old 360px cap. A narrower card than the
+       entry list above it read as a detached widget rather than the end of
+       the same column, and at 360px the Password row's input was squeezed
+       to a few characters once Show and Generate took their width. */
+    padding: var(--ss-space-5);
+    background: var(--ss-surface);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-lg);
   }
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
+
+  h2 {
+    font-size: var(--ss-text-lg);
   }
-  input,
-  textarea {
-    padding: 0.4rem;
+
+  .add-entry > button {
+    align-self: flex-start;
+    min-width: 10rem;
   }
-  textarea {
-    /* Browser default is resize: both, which lets the textarea grow wider
-       than every other field/button in the form - pin the width, keep
-       height freely resizable. */
-    width: 100%;
-    box-sizing: border-box;
-    resize: vertical;
-  }
+
   .password-row {
     display: flex;
-    gap: 0.4rem;
+    gap: var(--ss-space-2);
   }
+
   .password-row input {
     flex: 1;
     min-width: 0;
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1rem;
-  }
-  .notice {
-    background: #3a2f0f;
-    color: #f0d68a;
-    border: 1px solid #6b5a2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
+
+  @media (max-width: 32rem) {
+    .add-entry {
+      padding: var(--ss-space-4);
+    }
+    /* Show + Generate leave the password input about ten characters wide on
+       a 390px screen - give the input its own line instead. */
+    .password-row {
+      flex-wrap: wrap;
+    }
+    .password-row input {
+      flex-basis: 100%;
+    }
+    /* Full-width submit on a phone - "align-self: flex-start" leaves a
+       stranded small button under a stack of full-width fields. */
+    .add-entry > button {
+      align-self: stretch;
+    }
   }
 </style>

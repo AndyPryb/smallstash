@@ -54,24 +54,24 @@
     <button type="button" onclick={onclose}>Close</button>
   {:else}
     <form onsubmit={submit}>
-      <label>
+      <label class="field">
         Current Master Password
         <PasswordField bind:value={currentMasterPassword} autocomplete="off" required />
       </label>
 
       <hr />
 
-      <label>
+      <label class="field">
         New Master Password
         <PasswordField bind:value={newMasterPassword} autocomplete="off" required />
         <small>At least {MIN_MASTER_PASSWORD_LENGTH} characters.</small>
       </label>
-      <label>
+      <label class="field">
         Confirm new Master Password
         <PasswordField bind:value={confirmNewMasterPassword} autocomplete="off" required />
       </label>
 
-      <label>
+      <label class="field">
         Recovery Key
         <input
           bind:value={recoveryKeyInput}
@@ -85,7 +85,7 @@
       </label>
 
       <div class="actions">
-        <button type="submit" disabled={busy}>{busy ? 'Changing…' : 'Change Master Password'}</button>
+        <button type="submit" class="primary" disabled={busy}>{busy ? 'Changing…' : 'Change Master Password'}</button>
         <button type="button" onclick={onclose} disabled={busy}>Cancel</button>
       </div>
     </form>
@@ -93,63 +93,55 @@
 </div>
 
 <style>
+  /* Shared field/button/hr/`.error`/`.success` styling: src/app.css. Panel
+     geometry is deliberately identical to ChangeLoginPasswordForm's. */
   .panel {
-    border: 1px solid #333;
-    border-radius: 6px;
-    padding: 1rem;
-    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-space-4);
+    padding: var(--ss-space-5);
+    background: var(--ss-surface);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-lg);
+    box-shadow: var(--ss-shadow-2);
   }
+
   h2 {
-    font-size: 1rem;
-    margin-top: 0;
+    font-size: var(--ss-text-lg);
   }
+
   form {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--ss-space-4);
   }
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
+
+  /* The Recovery Key is transcribed from wherever the user saved it, so it
+     gets the monospace treatment used everywhere that key appears. */
+  form input {
+    font-family: var(--ss-font-mono);
+    letter-spacing: 0.04em;
   }
-  input {
-    padding: 0.5rem;
-    font-size: 1rem;
-  }
-  small {
-    color: #888;
-  }
-  hr {
-    /* See LoginForm.svelte for why this reset is needed - browser-default
-       hr margins disable flexbox stretch, collapsing it to a stray dot. */
-    width: 100%;
-    border: none;
-    border-top: 1px solid #333;
-    margin: 0;
-  }
+
   .actions {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+    margin-top: var(--ss-space-1);
   }
-  button {
-    padding: 0.6rem;
-    font-size: 1rem;
-    cursor: pointer;
+
+  .actions button.primary {
+    flex: 1;
+    min-width: 14rem;
   }
-  .error {
-    background: #3a1d1d;
-    color: #ffb4b4;
-    border: 1px solid #6b2c2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  .panel > button {
+    align-self: flex-start;
   }
-  .success {
-    background: #1d3a24;
-    color: #a8f0b8;
-    border: 1px solid #2c6b3c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+
+  @media (max-width: 32rem) {
+    .panel {
+      padding: var(--ss-space-4);
+    }
   }
 </style>

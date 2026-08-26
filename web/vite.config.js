@@ -70,8 +70,12 @@ export default defineConfig(({ mode }) => {
           name: 'Small Stash',
           short_name: 'Small Stash',
           description: 'Zero-knowledge password manager',
-          theme_color: '#1b1f24',
-          background_color: '#1b1f24',
+          // Must track --ss-canvas in src/app.css and the theme-color meta
+          // in index.html - these three are what an installed PWA paints
+          // its window chrome and splash screen with, and a mismatch shows
+          // up as a visible seam above the app on launch.
+          theme_color: '#0f1317',
+          background_color: '#0f1317',
           display: 'standalone',
           start_url: '/',
           icons: [

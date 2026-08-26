@@ -101,7 +101,7 @@
   }
 </script>
 
-<li>
+<li class:expanded={expanded || editing}>
   <div class="summary">
     <button
       type="button"
@@ -110,171 +110,298 @@
       disabled={editing}
       aria-expanded={expanded}
     >
-      <strong>{entry.title || '(untitled)'}</strong>
-      <span>{entry.username}</span>
+      <!-- Purely decorative disclosure caret, rotated by CSS on expand -
+           aria-expanded on the button is what actually conveys the state. -->
+      <svg class="caret" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 3.5 L11 8 L6 12.5" />
+      </svg>
+      <span class="entry-title"><strong>{entry.title || '(untitled)'}</strong></span>
+      <span class="entry-username">{entry.username}</span>
     </button>
-    <button type="button" onclick={handleRemove} aria-label="Delete entry" disabled={editing}>✕</button>
+    <button type="button" class="delete compact" onclick={handleRemove} aria-label="Delete entry" disabled={editing}>
+      ✕
+    </button>
   </div>
 
   {#if expanded && !editing}
     <div class="details">
-      <div class="field">
+      <div class="detail-row">
         <span class="label">Username</span>
-        <span>{entry.username || '—'}</span>
+        <span class="value">{entry.username || '—'}</span>
       </div>
 
-      <div class="field">
+      <div class="detail-row">
         <span class="label">Password</span>
-        <span class="password">{maskedPassword()}</span>
-        <button type="button" onclick={() => (showPassword = !showPassword)} disabled={!entry.password}>
+        <span class="value password">{maskedPassword()}</span>
+        <button type="button" class="compact" onclick={() => (showPassword = !showPassword)} disabled={!entry.password}>
           {showPassword ? 'Hide' : 'Show'}
         </button>
-        <button type="button" onclick={copyPassword} disabled={!entry.password}>{copied ? 'Copied!' : 'Copy'}</button>
+        <button type="button" class="compact" onclick={copyPassword} disabled={!entry.password}>
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
       </div>
 
-      <div class="field">
+      <div class="detail-row">
         <span class="label">URL</span>
         {#if entry.url}
-          <a href={normalizedUrl(entry.url)} target="_blank" rel="noopener noreferrer">{entry.url}</a>
+          <a class="value" href={normalizedUrl(entry.url)} target="_blank" rel="noopener noreferrer">{entry.url}</a>
         {:else}
-          <span>—</span>
+          <span class="value">—</span>
         {/if}
       </div>
 
-      <div class="field notes">
+      <div class="detail-row notes">
         <span class="label">Notes</span>
-        <p>{entry.notes || '—'}</p>
+        <p class="value">{entry.notes || '—'}</p>
       </div>
 
       <div class="row">
-        <button type="button" onclick={startEdit}>Edit</button>
+        <button type="button" class="compact" onclick={startEdit}>Edit</button>
       </div>
     </div>
   {/if}
 
   {#if editing}
     <form class="edit-form" onsubmit={saveEdit}>
-      <label>Title <input bind:value={editTitle} required /></label>
-      <label>Username <input bind:value={editUsername} /></label>
-      <label>
+      <label class="field">Title <input bind:value={editTitle} required /></label>
+      <label class="field">Username <input bind:value={editUsername} /></label>
+      <label class="field">
         Password
         <span class="password-row">
           <input type={showPassword ? 'text' : 'password'} bind:value={editPassword} />
-          <button type="button" onclick={() => (showPassword = !showPassword)}>
+          <button type="button" class="compact" onclick={() => (showPassword = !showPassword)}>
             {showPassword ? 'Hide' : 'Show'}
           </button>
-          <button type="button" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
+          <button type="button" class="compact" onclick={() => (showGenerator = !showGenerator)}>Generate</button>
         </span>
       </label>
       {#if showGenerator}
         <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
       {/if}
-      <label>URL <input bind:value={editUrl} /></label>
-      <label>Notes <ResizableTextarea bind:value={editNotes} /></label>
+      <label class="field">URL <input bind:value={editUrl} /></label>
+      <label class="field">Notes <ResizableTextarea bind:value={editNotes} /></label>
       <div class="row">
-        <button type="submit">Save</button>
-        <button type="button" onclick={cancelEdit}>Cancel</button>
+        <button type="submit" class="primary compact">Save</button>
+        <button type="button" class="compact" onclick={cancelEdit}>Cancel</button>
       </div>
     </form>
   {/if}
 </li>
 
 <style>
+  /**
+   * One entry, as a card. The old treatment was a bare row with a hairline
+   * underneath, which worked while every row was one line tall but fell
+   * apart once a row could expand into a details panel or a full edit form
+   * - there was nothing to show where one entry's expanded content ended
+   * and the next entry began.
+   *
+   * Shared control styling (buttons, inputs, `.field` labels) is in
+   * src/app.css; `.compact` is the dense button variant used throughout
+   * here, since a 44px control would out-weigh the content it acts on.
+   */
   li {
     display: flex;
     flex-direction: column;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #333;
+    padding: var(--ss-space-2);
+    background: var(--ss-surface);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-lg);
+    transition: border-color 120ms ease, background-color 120ms ease;
   }
+
+  li:hover {
+    border-color: var(--ss-border-strong);
+  }
+
+  /* An open entry is the one the user is working in - lift it out of the
+     stack with a stronger border and a shadow instead of leaving every
+     card identical. */
+  li.expanded {
+    border-color: var(--ss-border-strong);
+    box-shadow: var(--ss-shadow-1);
+  }
+
   .summary {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: var(--ss-space-2);
   }
+
+  /* The whole summary line is the disclosure control, so it's a full-width
+     borderless button rather than a small hit area next to the title. */
   .toggle {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    /* Overrides the shared button centring from app.css - this one is a
+       full-width row of content, not a label in a pill. */
+    justify-content: flex-start;
+    gap: var(--ss-space-3);
     flex: 1;
+    min-width: 0;
+    min-height: var(--ss-control-height);
+    padding: 0 var(--ss-space-2);
     background: none;
     border: none;
-    padding: 0;
-    text-align: left;
-    cursor: pointer;
+    border-radius: var(--ss-radius-md);
     color: inherit;
     font: inherit;
+    font-weight: 400;
+    text-align: left;
   }
+
+  .toggle:hover:not(:disabled) {
+    background: var(--ss-surface-raised);
+    border-color: transparent;
+  }
+
   .toggle:disabled {
     cursor: default;
     opacity: 0.6;
   }
+
+  .caret {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+    fill: none;
+    stroke: var(--ss-text-faint);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 150ms ease, stroke 120ms ease;
+  }
+
+  li.expanded .caret {
+    transform: rotate(90deg);
+    stroke: var(--ss-accent);
+  }
+
+  .entry-title {
+    flex-shrink: 0;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Secondary to the title, and the first thing to give up space when the
+     card is narrower than both fields want. */
+  .entry-username {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ss-text-muted);
+    font-size: var(--ss-text-sm);
+  }
+
+  .delete {
+    flex-shrink: 0;
+    background: transparent;
+    border-color: transparent;
+    color: var(--ss-text-faint);
+    /* Square, so the ✕ sits centred rather than in a wide pill. */
+    width: var(--ss-control-height-sm);
+    padding: 0;
+  }
+
+  .delete:hover:not(:disabled) {
+    background: var(--ss-danger-surface);
+    border-color: var(--ss-danger-border);
+    color: var(--ss-danger-text);
+  }
+
+  /* Sunken relative to the card, which is itself raised from the canvas -
+     the expanded content reads as inside the entry, not stacked on it. */
   .details,
   .edit-form {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-    padding: 0.75rem;
-    background: #14171b;
-    border: 1px solid #333;
-    border-radius: 6px;
+    gap: var(--ss-space-3);
+    margin-top: var(--ss-space-2);
+    padding: var(--ss-space-4);
+    background: var(--ss-surface-sunken);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-md);
   }
-  .field {
+
+  .detail-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.9rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+    font-size: var(--ss-text-base);
   }
-  .field.notes {
+
+  .detail-row.notes {
     align-items: flex-start;
   }
-  .field.notes p {
-    margin: 0;
-    white-space: pre-wrap;
+
+  .label {
+    min-width: 5.5rem;
+    flex-shrink: 0;
+    color: var(--ss-text-faint);
+    font-size: var(--ss-text-xs);
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    /* Small-caps-style key column: at this size, tracking and case do more
+       to separate label from value than another shade of grey would. */
+    text-transform: uppercase;
+  }
+
+  .value {
+    min-width: 0;
     word-break: break-word;
   }
-  .label {
-    min-width: 5rem;
-    color: #888;
+
+  .detail-row.notes .value {
+    flex: 1;
+    white-space: pre-wrap;
   }
+
   .password {
-    font-family: monospace;
+    flex: 1;
+    font-family: var(--ss-font-mono);
     letter-spacing: 0.05em;
     word-break: break-all;
   }
+
   .row {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
   }
-  .edit-form label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
-  }
-  .edit-form input,
-  .edit-form textarea {
-    padding: 0.4rem;
-  }
-  .edit-form textarea {
-    /* Browser default is resize: both, which lets the textarea grow wider
-       than every other field/button in the form - pin the width, keep
-       height freely resizable. */
-    width: 100%;
-    box-sizing: border-box;
-    resize: vertical;
-  }
+
   .password-row {
     display: flex;
-    gap: 0.4rem;
+    gap: var(--ss-space-2);
   }
+
   .password-row input {
     flex: 1;
     min-width: 0;
   }
-  button {
-    padding: 0.3rem 0.6rem;
-    font-size: 0.85rem;
-    cursor: pointer;
+
+  /* The edit form is itself a sunken panel, so the default sunken field
+     background would vanish into it. Setting the token rather than the
+     property means the nested ResizableTextarea picks this up too, which a
+     scoped `textarea` selector could never reach. */
+  .edit-form {
+    --ss-field-bg: var(--ss-surface);
+  }
+
+  /* Same reasoning as VaultView's add-entry form - Show and Generate crowd
+     the password input off a phone-width screen. */
+  @media (max-width: 32rem) {
+    .password-row {
+      flex-wrap: wrap;
+    }
+    .password-row input {
+      flex-basis: 100%;
+    }
+    .label {
+      min-width: 100%;
+    }
   }
 </style>

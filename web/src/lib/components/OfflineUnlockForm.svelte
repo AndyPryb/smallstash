@@ -22,55 +22,66 @@
   }
 </script>
 
-<div class="offline-banner">You're offline - unlocking from the last vault cached on this device.</div>
+<div class="offline-banner notice">You're offline - unlocking from the last vault cached on this device.</div>
 
 <form onsubmit={submit}>
-  <p>Signed in as <strong>{email}</strong></p>
+  <p class="account">Signed in as <strong>{email}</strong></p>
 
-  <label>
+  <label class="field">
     Master Password
     <PasswordField bind:value={masterPassword} autocomplete="off" required />
   </label>
 
   <div class="actions">
-    <button type="submit" disabled={loading}>{loading ? 'Unlocking…' : 'Unlock vault'}</button>
+    <button type="submit" class="primary" disabled={loading}>{loading ? 'Unlocking…' : 'Unlock vault'}</button>
     <button type="button" onclick={ononline}>Try signing in online instead</button>
   </div>
 
-  <small>Changes made offline can be viewed and edited, but won't sync until you're back online and sign in again.</small>
+  <small class="hint">Changes made offline can be viewed and edited, but won't sync until you're back online and sign in again.</small>
 </form>
 
 <style>
+  /* The banner reuses the shared `.notice` treatment from src/app.css
+     rather than carrying its own near-identical copy of the amber box -
+     one status colour, defined once. */
+  .offline-banner {
+    margin-bottom: var(--ss-space-4);
+  }
+
   form {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--ss-space-4);
   }
-  label {
+
+  /* Identity chip: this screen's whole job is "unlock as *this* account",
+     so the email is a distinct object rather than a line of prose. */
+  .account {
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.9rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
+    padding: var(--ss-space-3) var(--ss-space-4);
+    background: var(--ss-surface-raised);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-md);
+    color: var(--ss-text-muted);
+    font-size: var(--ss-text-sm);
   }
-  small {
-    color: #888;
+
+  .account strong {
+    color: var(--ss-text);
+    font-weight: 600;
+    word-break: break-all;
   }
+
   .actions {
     display: flex;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    gap: var(--ss-space-2);
   }
-  button {
-    padding: 0.6rem;
-    font-size: 1rem;
-    cursor: pointer;
-  }
-  .offline-banner {
-    background: #3a2f0f;
-    color: #f0d68a;
-    border: 1px solid #6b5a2c;
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
+
+  .actions button.primary {
+    flex: 1;
+    min-width: 10rem;
   }
 </style>

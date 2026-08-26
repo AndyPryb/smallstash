@@ -73,14 +73,13 @@
     position: relative;
   }
   textarea {
-    width: 100%;
-    box-sizing: border-box;
+    display: block;
     /* Native resize turned off - the custom handle below replaces it
        everywhere, so there's exactly one resize affordance, not two. */
     resize: none;
     /* Room for the handle so it doesn't sit on top of typed text in the
        corner. */
-    padding-bottom: 1.75rem;
+    padding-bottom: var(--ss-space-6);
   }
   .resize-handle {
     position: absolute;
@@ -94,23 +93,32 @@
        eating usable textarea space. */
     width: 32px;
     height: 32px;
+    min-height: 0;
     padding: 0;
     border: none;
+    border-radius: 0 0 var(--ss-radius-md) 0;
     background: transparent;
-    color: #888;
+    color: var(--ss-text-faint);
     cursor: nwse-resize;
     touch-action: none;
     display: flex;
     align-items: flex-end;
     justify-content: flex-end;
   }
-  .resize-handle:hover,
+  .resize-handle:hover:not(:disabled),
   .resize-handle.dragging {
-    color: #ccc;
+    background: transparent;
+    border-color: transparent;
+    color: var(--ss-accent);
+  }
+  /* The shared press-nudge in app.css would shift the handle mid-drag,
+     which reads as the grip slipping out from under the pointer. */
+  .resize-handle:active:not(:disabled) {
+    transform: none;
   }
   .resize-handle svg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     fill: currentColor;
   }
 </style>
