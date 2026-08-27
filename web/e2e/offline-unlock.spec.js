@@ -56,7 +56,10 @@ test.describe('Offline unlock', () => {
     await page.getByRole('button', { name: 'Unlock vault' }).click();
 
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('heading', { name: 'Add entry' })).toBeVisible();
+    // The add-entry form is collapsed behind the "New entry" toolbar button
+    // now (it used to be permanently expanded), so the button - not the
+    // form's heading - is what proves the vault view rendered.
+    await expect(page.getByRole('button', { name: 'New entry' })).toBeVisible();
     // The dedicated banner from VaultView.svelte confirming this is known
     // to be an offline session, not a false "everything's normal" view.
     await expect(page.getByText("You're viewing an offline copy")).toBeVisible();

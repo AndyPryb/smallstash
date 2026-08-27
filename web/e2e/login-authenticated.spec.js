@@ -24,7 +24,10 @@ test.describe('Login - authenticated', () => {
     // Generous timeout: this round trip is Cognito SRP + GET /keys + GET
     // /vault + client-side Argon2id, not a single fast request.
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible({ timeout: 20000 });
-    await expect(page.getByRole('heading', { name: 'Add entry' })).toBeVisible();
+    // The add-entry form is collapsed behind the "New entry" toolbar button
+    // now (it used to be permanently expanded), so the button - not the
+    // form's heading - is what proves the vault view rendered.
+    await expect(page.getByRole('button', { name: 'New entry' })).toBeVisible();
 
     // No stray error banner despite the successful unlock.
     await expect(page.getByRole('alert')).toHaveCount(0);

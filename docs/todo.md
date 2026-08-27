@@ -364,9 +364,27 @@ The items below were **not** touched by the slice above.
         unstyleable and inconsistent with everything around them. Now the
         *only* remaining un-restyled UI surface, since every inline message
         went through `Alert.svelte`.
-      - **Add-entry is a permanent form at the bottom of the list**, not a
-        dialog or a dedicated view, so it's below the fold on any
-        non-trivial vault.
+      - [x] ~~**Add-entry is a permanent form at the bottom of the list**~~ -
+        **done 2026-08-27 (uncommitted).** It's now a collapsible panel behind
+        a "New entry" toolbar button, joining the same one-at-a-time
+        `openPanel` model as the two change-password panels and Export, so
+        opening any one closes the others. Reading existing entries is the
+        common visit, and a permanently expanded form made every session look
+        like it was asking you to create something.
+        Details worth knowing: the form moved **above** the entry list so it
+        renders directly under the button that opens it (the two
+        change-password panels already taught that a panel opening far from
+        its trigger reads as nothing having happened); the toolbar button is
+        **"New entry"** while the submit stays **"Add entry"**, deliberately
+        distinct accessible names after the duplicate-name work; the panel
+        **collapses after a successful add** (one line in `addEntry` to flip
+        if batch-adding turns out to be common); and half-typed input
+        survives switching to another panel and back, because the field state
+        lives in `VaultView` rather than in the removed DOM.
+        `login-authenticated.spec.js` and `offline-unlock.spec.js` both
+        asserted the heading "Add entry" was visible after unlock - they now
+        assert the "New entry" **button** instead, since the form is no longer
+        on screen by default.
       - **Error messages are raw `err.message` in several places** (see
         `errors.js`'s `friendlyAuthErrorMessage` for the pattern that
         exists but isn't applied everywhere). Unchanged by the slice above -
@@ -544,6 +562,62 @@ the header glyph render as intended, no console errors); `npm test`
 Idea: let a vault entry hold a document/file attachment (e.g. a scanned
 ID, a recovery-codes printout), not just text fields. Raised in
 conversation only - not scoped yet.
+
+### 📋 Full plan written 2026-08-27: [file-storage-plan.md](file-storage-plan.md)
+
+A deep read of the existing backend, infra and client, plus the architecture
+this feature needs. **Nothing is implemented.** Read that document before
+starting; the headlines are:
+
+- Files cannot go through the API at all. **Lambda's synchronous payload limit
+  is 6 MB and API Gateway's is 10 MB** (verified, not assumed), and Micronaut
+  here is set to 1 MB with Base64 inflating bodies by a third. The browser
+  must upload **directly to S3 via presigned URLs**; the backend only mints
+  them. Recommended specifically **presigned POST**, because its signed
+  `content-length-range` is the only variant where the *server* can enforce a
+  size limit it didn't carry the bytes for.
+- Per-file data key, **wrapped by the Vault Key, not the Master Key** - so
+  changing the Master Password (which only re-wraps the Vault Key) doesn't
+  have to re-wrap every file, and the Recovery Key reaches files for free.
+- **Two infra gaps that will look like bugs if missed**: the vault bucket has
+  **no CORS configuration at all**, and the CSP's `connect-src` has no S3
+  origin. Either one makes uploads fail looking like a network error rather
+  than a policy error.
+- **The quota work that was dropped from Phase 1 has to come back.** It was
+  retired because per-user storage was bounded at ~2 MB by the 512 KiB vault
+  cap - true then, false the moment files exist. `UserProfile.storageBytesUsed`
+  already exists in the model, unused.
+- **Deleting a file touches a deliberate security control**: the Lambda has no
+  `s3:DeleteObject`, removed on purpose so it cannot destroy the vault's
+  version history. See the plan for the three options.
+
+### ❓ File storage - questions to answer (blocking Phase 0)
+
+Recommendations in brackets; these need a decision, not necessarily a debate.
+
+- [ ] **1. Per-file size cap?** [proposal: 25 MB]
+- [ ] **2. Per-user total quota?** [proposal: 1 GB]
+- [ ] **3. Allowed file types** - anything, or a constrained list?
+      [recommend: anything - refusing a `.p12` defeats the purpose]
+- [ ] **4. Attached to an entry only, or also standalone documents?** Changes
+      the vault schema and the UI shape.
+- [ ] **5. Deletion: immediate or eventual?** [recommend: immediate, via
+      `s3:DeleteObject` scoped to `users/*/files/*` so the vault blob itself
+      stays undeletable - "your private key will be gone in 7 days" is a poor
+      answer]
+- [ ] **6. Same bucket + `files/` prefix, or a separate bucket?**
+      [recommend: same bucket - IAM is already prefix-scoped]
+- [ ] **7. Offline file access** - pin per file, cache on download, or never?
+      Note iOS evicts storage for non-installed PWAs after ~7 days of disuse.
+- [ ] **8. Should the plaintext export include files?** It would write private
+      keys to disk unencrypted - consistent with the existing export, but a
+      sharper edge. Possibly a separate opt-in.
+- [ ] **9. Re-affirm `RemovalPolicy.DESTROY`.** The accepted-risk decision on
+      record was about vaults. A `cdk destroy` would now also delete
+      irreplaceable documents - a different kind of loss from a re-derivable
+      password entry. Worth re-affirming knowingly rather than inheriting.
+- [ ] **10. Chunked/streaming encryption now, or whole-file behind a cap?**
+      [recommend: later - the envelope's version byte leaves room]
 
 ### Storage model - decided 2026-08-26: separate per-file S3 objects
 
