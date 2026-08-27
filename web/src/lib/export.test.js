@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { entriesToCsv, csvFileName, buildExportArtifacts, CSV_COLUMNS, BOM } from './export.js';
+import { entriesToCsv, csvFileName, buildExportArtifacts, fileArtifactPaths, CSV_COLUMNS, BOM } from './export.js';
 
 const HEADER = 'title,username,password,url,notes';
 
@@ -151,4 +151,83 @@ test('non-ASCII content round-trips unchanged', () => {
   const csv = entriesToCsv([entry({ password: 'pässwörd–✓', notes: 'Ω' })]);
   assert.ok(csv.includes('pässwörd–✓'));
   assert.ok(csv.includes('Ω'));
+});
+
+// --- files (docs/file-storage-plan.md Phase 4) --------------------------
+
+const file = (over = {}) => ({
+  name: 'document.pdf',
+  mimeType: 'application/pdf',
+  bytes: new Uint8Array([1, 2, 3, 4]),
+  ...over,
+});
+
+test('buildExportArtifacts with no files option reproduces the exact CSV-only output', () => {
+  const vault = { entries: [entry()] };
+  const withoutOption = buildExportArtifacts(vault, new Date(2026, 7, 26));
+  const withEmptyFiles = buildExportArtifacts(vault, new Date(2026, 7, 26), { files: [] });
+  assert.equal(withoutOption.length, 1);
+  assert.deepEqual(withoutOption, withEmptyFiles);
+});
+
+test('buildExportArtifacts adds one artifact per file, under files/', () => {
+  const artifacts = buildExportArtifacts(
+    { entries: [] },
+    new Date(),
+    { files: [file({ name: 'a.pdf' }), file({ name: 'b.jpg', mimeType: 'image/jpeg' })] },
+  );
+
+  assert.equal(artifacts.length, 3, 'CSV + 2 files');
+  assert.equal(artifacts[0].path.endsWith('.csv'), true, 'CSV artifact stays first');
+  assert.equal(artifacts[1].path, 'files/a.pdf');
+  assert.equal(artifacts[2].path, 'files/b.jpg');
+  assert.equal(artifacts[2].mimeType, 'image/jpeg');
+});
+
+test('buildExportArtifacts passes file bytes through unchanged, not re-encoded', () => {
+  const bytes = new Uint8Array([255, 0, 128, 64]);
+  const [, fileArtifact] = buildExportArtifacts({ entries: [] }, new Date(), { files: [file({ bytes })] });
+
+  assert.equal(fileArtifact.contents, bytes, 'must be the same bytes, not a copy or a string conversion');
+});
+
+test('buildExportArtifacts de-duplicates files that share a name', () => {
+  const artifacts = buildExportArtifacts(
+    { entries: [] },
+    new Date(),
+    { files: [file({ name: 'receipt.pdf' }), file({ name: 'receipt.pdf' }), file({ name: 'receipt.pdf' })] },
+  );
+
+  const paths = artifacts.slice(1).map((a) => a.path);
+  assert.deepEqual(paths, ['files/receipt.pdf', 'files/receipt (1).pdf', 'files/receipt (2).pdf']);
+  // Every path is unique - no artifact would silently overwrite another
+  // when written to a real directory.
+  assert.equal(new Set(paths).size, paths.length);
+});
+
+test('buildExportArtifacts de-duplicates an extension-less file name', () => {
+  const artifacts = buildExportArtifacts(
+    { entries: [] },
+    new Date(),
+    { files: [file({ name: 'README' }), file({ name: 'README' })] },
+  );
+
+  assert.deepEqual(artifacts.slice(1).map((a) => a.path), ['files/README', 'files/README (1)']);
+});
+
+test('fileArtifactPaths matches the paths buildExportArtifacts would assign, computed from name alone', () => {
+  // ExportPanel.svelte's streamed export relies on this: it needs the final
+  // path *before* a file's bytes are downloaded, to write straight into a
+  // directory handle opened ahead of the fetch (docs/file-storage-plan.md
+  // Phase 4's transient-activation fix). This locks the two in agreement.
+  const metadata = [{ name: 'receipt.pdf' }, { name: 'receipt.pdf' }, { name: 'photo.jpg' }];
+  const paths = fileArtifactPaths(metadata);
+
+  const artifacts = buildExportArtifacts(
+    { entries: [] },
+    new Date(),
+    { files: metadata.map((m) => file({ name: m.name })) },
+  );
+
+  assert.deepEqual(paths, artifacts.slice(1).map((a) => a.path));
 });

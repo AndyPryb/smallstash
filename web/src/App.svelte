@@ -5,6 +5,7 @@
   import ForgotPasswordForm from './lib/components/ForgotPasswordForm.svelte';
   import OfflineUnlockForm from './lib/components/OfflineUnlockForm.svelte';
   import VaultView from './lib/components/VaultView.svelte';
+  import FilesView from './lib/components/FilesView.svelte';
   import Alert from './lib/components/Alert.svelte';
   import {
     signInAndUnlock,
@@ -36,6 +37,13 @@
   let showOffline = $derived((!online || forceOffline) && lastAccount !== null);
 
   let lockedByInactivity = $state(false);
+
+  /** Which tab is showing, once unlocked (docs/file-storage-plan.md
+   * decision #4 - Files is a separate tab from Secrets, not merged into
+   * the same view). Reset on every sign-out/lock below, so a fresh unlock
+   * always lands back on Secrets rather than wherever a previous session
+   * happened to leave off. */
+  let view = $state('secrets');
 
   onMount(() => {
     const goOnline = () => {
@@ -79,6 +87,7 @@
     const unsubscribeAutoLock = onAutoLock(() => {
       vaultDocument = null;
       lockedByInactivity = true;
+      view = 'secrets';
     });
 
     return () => {
@@ -152,6 +161,7 @@
     lockedByInactivity = false;
     error = '';
     notice = '';
+    view = 'secrets';
   }
 
   /** @param {'login' | 'signup' | 'forgot-password'} mode */
@@ -213,7 +223,23 @@
   {/if}
 
   {#if vaultDocument}
-    <VaultView bind:vaultDocument onsignout={handleSignOut} />
+    <!-- Tabs, not two always-visible sections - Secrets and Files are
+         both potentially long lists, and showing both stacked would bury
+         one below the other. -->
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={view === 'secrets'} onclick={() => (view = 'secrets')}>
+        Secrets
+      </button>
+      <button type="button" role="tab" aria-selected={view === 'files'} onclick={() => (view = 'files')}>
+        Files
+      </button>
+    </div>
+
+    {#if view === 'secrets'}
+      <VaultView bind:vaultDocument onsignout={handleSignOut} />
+    {:else}
+      <FilesView onsignout={handleSignOut} />
+    {/if}
   {:else}
     <!-- Every pre-unlock view shares one elevated card. Signed-in vault
          content deliberately doesn't - a list that grows to any length
@@ -313,6 +339,37 @@
     border: 1px solid var(--ss-border);
     border-radius: var(--ss-radius-lg);
     box-shadow: var(--ss-shadow-2);
+  }
+
+  /* Underline-style tabs rather than a button pair - "which one is active"
+     needs to read at a glance, and a persistent underline survives the
+     sticky VaultView/FilesView toolbar scrolling underneath it better than
+     a background-fill treatment would. */
+  .tabs {
+    display: flex;
+    gap: var(--ss-space-2);
+    border-bottom: 1px solid var(--ss-border);
+  }
+
+  .tabs button {
+    min-height: var(--ss-control-height-sm);
+    padding: var(--ss-space-2) var(--ss-space-1);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    margin-bottom: -1px;
+    color: var(--ss-text-muted);
+    font-weight: 500;
+  }
+
+  .tabs button:hover:not([aria-selected='true']) {
+    color: var(--ss-text);
+  }
+
+  .tabs button[aria-selected='true'] {
+    border-bottom-color: var(--ss-accent);
+    color: var(--ss-text);
   }
 
   .switch-modes {

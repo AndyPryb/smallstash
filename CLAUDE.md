@@ -67,7 +67,21 @@ itself. Full design: [docs/architecture.md](docs/architecture.md).
 ## Repo map
 
 ```
-pom.xml, src/            Micronaut backend (the Lambda) - Java 25, Maven
+pom.xml                 Reactor aggregator only (packaging=pom) - no source
+                         of its own. `mvn package` here builds every module
+                         below in one invocation.
+common/                  Shared Java lib - CurrentUser, ResourceNotFound*
+                         (docs/file-storage-plan.md sec 3a). Not a Lambda
+                         deployment artifact itself.
+vault-lambda/            Micronaut backend (the vault/keys Lambda) - Java 25,
+                         Maven. Was the repo-root project before the
+                         multi-module restructuring (2026-08-27); package
+                         names unchanged, only its module location moved.
+files-lambda/            Micronaut backend (the files Lambda) - Java 25,
+                         Maven, sibling to vault-lambda, added 2026-08-27
+                         (docs/file-storage-plan.md). Own S3 bucket, own IAM
+                         role with zero DynamoDB/vault-bucket access, same
+                         HttpApi + Cognito authorizer as vault-lambda.
 infra/                   AWS CDK app (Java) - defines all AWS resources.
                          Independent Maven project; only references the
                          backend's build OUTPUT (the jar), not its source.
@@ -90,9 +104,16 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 
 ## Current status (check `git log` / `docs/architecture.md` §9 for the live version)
 
-- Backend (`vault`, `keys`, `security`, `error`, `config` packages):
-  written, compiles clean, LocalStack integration tests written but not
-  yet run end-to-end here (needs Docker, unavailable in this sandbox).
+- Backend (`vault`/`keys`/`config` in `vault-lambda`, `security`/`error` in
+  `common`): written, compiles clean. **LocalStack integration tests do run
+  here** - `./mvnw test` reaches the real Docker engine and passes
+  (`Tests run: 5, Failures: 0, Errors: 0, Skipped: 0` as of 2026-08-27). An
+  earlier version of this line said Docker was unavailable in this sandbox;
+  that was a false negative from the bare `docker` CLI not being on this
+  shell's `PATH`, not from the engine actually being unreachable - checked
+  via `./mvnw test` directly, not assumed from a `docker info` probe. Use
+  the wrapper, not a `docker`/`docker info` check, to tell whether tests can
+  run here.
 - Infra (`infra/`): **deployed and live** (2026-08-25, in-place update to
   the same stack — `SmallstashStack` ARN, pool ID `eu-west-1_PWU4xOAuS`,
   API URL, and bucket names all unchanged from the "Live stack outputs" in
@@ -166,8 +187,11 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 
 ```bash
 # Backend: build + test (test needs Docker running - LocalStack via testcontainers)
-mvn -DskipTests package        # produces target/smallstash-0.1.jar - infra/ points at this
-mvn test                       # full LocalStack-backed integration tests
+# Run from the repo root - it's a reactor aggregator (see Repo map above),
+# so this builds common/, vault-lambda/, and files-lambda/ in one invocation.
+mvn -DskipTests package        # produces vault-lambda/target/vault-lambda-0.1.jar and
+                                # files-lambda/target/files-lambda-0.1.jar - infra/ points at both
+mvn test                       # full LocalStack-backed integration tests, all modules
 
 # Frontend: test + build (from web/)
 npm test                       # 97 tests, node:test, no browser needed
@@ -204,6 +228,13 @@ CDK_OUTDIR=cdk.out ../mvnw compile exec:java   # `cdk synth` without the CLI
 
 ## Working agreements (learned this session, keep applying them)
 
+- **"Is Docker available" means running `./mvnw test` (or `mvn test`), not
+  `docker`/`docker info`.** The bare `docker` CLI isn't on this shell's
+  `PATH`, so a `docker info` probe fails even when the engine is reachable
+  and Micronaut's test-resources service connects to it fine - this false
+  negative got asserted as fact across three file-storage-plan.md phase
+  write-ups before being caught (2026-08-27) and corrected in each. Always
+  check with the actual Maven command, not a Docker CLI proxy for it.
 - **Security claims especially need verifying, not asserting.** Several
   plausible-sounding "facts" turned out to be wrong when checked during the
   2026-08-24 review: AWS WAF can't attach to an API Gateway HTTP API (v2)

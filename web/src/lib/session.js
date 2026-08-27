@@ -7,6 +7,15 @@ import {
   changePassword as cognitoChangePassword,
 } from './auth/cognito.js';
 import { getKeys, putKeys, getVault, putVault } from './api/client.js';
+import { getFilesIndex, putFilesIndex } from './api/filesIndex.js';
+import {
+  mintFileUpload,
+  uploadFileBytes,
+  commitFileUpload,
+  getFileDownloadUrl,
+  downloadFileBytes,
+  deleteFile as apiDeleteFile,
+} from './api/files.js';
 import {
   createKeyMaterial,
   unlockWithMasterPassword,
@@ -14,6 +23,15 @@ import {
   encryptVault,
   decryptVault,
 } from './crypto/vault.js';
+import {
+  generateFileKey,
+  wrapFileKey,
+  unwrapFileKey,
+  encryptFile,
+  decryptFile,
+  encryptFilesIndex,
+  decryptFilesIndex,
+} from './crypto/files.js';
 import { wipe } from './bytes.js';
 import {
   cacheKeyMaterial,
@@ -282,6 +300,140 @@ export async function saveVault(vaultDocument) {
   const ciphertextBase64 = await encryptVault(active.vaultKey, vaultDocument);
   const { versionId } = await putVault(active.idToken, ciphertextBase64);
   await cacheVault(active.sub, ciphertextBase64, versionId);
+}
+
+/* -------------------------------------------------------------------------
+ * Files (docs/file-storage-plan.md) - standalone documents, own encrypted
+ * index (crypto/files.js's `encryptFilesIndex`/`decryptFilesIndex`), never
+ * touching vaultDocument or `saveVault` above. Phase 2 ("client crypto +
+ * upload/download plumbing, no UI polish") - nothing here is wired into a
+ * component yet; that's Phase 3.
+ *
+ * No local caching of the index or file bytes (§0.7 - offline file access
+ * was explicitly declined, export covers that need instead), so every
+ * function here round-trips to the server - simpler than the vault's
+ * cache-then-reconcile shape, and correct given files require network
+ * either way to fetch bytes from S3.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * @returns {Promise<import('./crypto/files.js').FileMetadata[]>} the current
+ *   files list, or `[]` if this user has never uploaded one - see
+ *   `getFilesIndex`'s null-on-404 handling for why that's not an error here.
+ */
+export async function listFiles() {
+  if (!active) throw new Error('No active session');
+  if (!active.idToken) throw new Error('Cannot list files while offline - reconnect and sign in again');
+
+  const index = await getFilesIndex(active.idToken);
+  if (!index) return [];
+  const document = await decryptFilesIndex(active.vaultKey, index.ciphertextBase64);
+  return document.files;
+}
+
+/**
+ * Encrypts and uploads a new file, then adds it to the index. Requires an
+ * online session throughout - unlike `saveVault`, there is no local-first
+ * step to fall back to, since the upload itself needs the network.
+ *
+ * @param {{ name: string, type: string, arrayBuffer: () => Promise<ArrayBuffer> }} file
+ *   a browser `File`/`Blob` - only this shape is used, so a test double
+ *   doesn't need to be a real `File`
+ * @returns {Promise<import('./crypto/files.js').FileMetadata>} the new entry
+ */
+export async function uploadFile(file) {
+  if (!active) throw new Error('No active session');
+  if (!active.idToken) throw new Error('Cannot upload files while offline - reconnect and sign in again');
+
+  const plaintext = new Uint8Array(await file.arrayBuffer());
+  const fileKey = generateFileKey();
+  let ciphertext;
+  try {
+    ciphertext = await encryptFile(fileKey, plaintext);
+
+    const { fileId, upload } = await mintFileUpload(active.idToken, ciphertext.byteLength);
+    await uploadFileBytes(upload, ciphertext);
+    // The authoritative size - what commit's own HeadObject actually saw,
+    // not what this device computed. See FilesController's Javadoc: this is
+    // also the point real size/quota enforcement happens, so a throw here
+    // means the object was already deleted server-side, not left dangling.
+    const { sizeBytes } = await commitFileUpload(active.idToken, fileId);
+
+    /** @type {import('./crypto/files.js').FileMetadata} */
+    const entry = {
+      id: fileId,
+      name: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      sizeBytes,
+      wrappedFileKey: await wrapFileKey(active.vaultKey, fileKey),
+      createdAt: new Date().toISOString(),
+    };
+
+    const index = await getFilesIndex(active.idToken);
+    const document = index ? await decryptFilesIndex(active.vaultKey, index.ciphertextBase64) : { files: [] };
+    document.files = [...document.files, entry];
+    const updatedCiphertextBase64 = await encryptFilesIndex(active.vaultKey, document);
+    await putFilesIndex(active.idToken, updatedCiphertextBase64);
+
+    return entry;
+  } finally {
+    wipe(fileKey);
+    wipe(plaintext);
+    if (ciphertext) wipe(ciphertext);
+  }
+}
+
+/**
+ * Downloads and decrypts a file's bytes.
+ *
+ * @param {string} fileId
+ * @returns {Promise<{ name: string, mimeType: string, bytes: Uint8Array }>}
+ *   plaintext bytes plus enough metadata to write them back out as a real
+ *   file (e.g. via `saveFile.js`, same as export's writer)
+ */
+export async function downloadFile(fileId) {
+  if (!active) throw new Error('No active session');
+  if (!active.idToken) throw new Error('Cannot download files while offline - reconnect and sign in again');
+
+  const index = await getFilesIndex(active.idToken);
+  if (!index) throw new Error('No files found');
+  const document = await decryptFilesIndex(active.vaultKey, index.ciphertextBase64);
+  const entry = document.files.find((f) => f.id === fileId);
+  if (!entry) throw new Error('That file was not found in your files list');
+
+  const { url } = await getFileDownloadUrl(active.idToken, fileId);
+  const ciphertext = await downloadFileBytes(url);
+  const fileKey = await unwrapFileKey(active.vaultKey, entry.wrappedFileKey);
+  try {
+    const bytes = await decryptFile(fileKey, ciphertext);
+    return { name: entry.name, mimeType: entry.mimeType, bytes };
+  } finally {
+    wipe(fileKey);
+  }
+}
+
+/**
+ * Deletes a file from storage and removes it from the index. The API call
+ * and the index update are two separate requests with no transaction across
+ * them - if the process dies between them, the object is gone from S3 but
+ * still listed in the index. `downloadFile`'s 404 from a stale listing is
+ * the intended, if not particularly graceful, recovery signal for that gap;
+ * revisit if it turns out to matter more than that in practice.
+ *
+ * @param {string} fileId
+ */
+export async function removeFile(fileId) {
+  if (!active) throw new Error('No active session');
+  if (!active.idToken) throw new Error('Cannot delete files while offline - reconnect and sign in again');
+
+  await apiDeleteFile(active.idToken, fileId);
+
+  const index = await getFilesIndex(active.idToken);
+  if (!index) return;
+  const document = await decryptFilesIndex(active.vaultKey, index.ciphertextBase64);
+  document.files = document.files.filter((f) => f.id !== fileId);
+  const updatedCiphertextBase64 = await encryptFilesIndex(active.vaultKey, document);
+  await putFilesIndex(active.idToken, updatedCiphertextBase64);
 }
 
 /**

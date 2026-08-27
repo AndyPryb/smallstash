@@ -11,7 +11,9 @@ import { validateVaultSize } from '../policy.js';
 /**
  * @param {string} path e.g. '/vault'
  * @param {object} [options]
- * @param {'GET'|'PUT'} [options.method]
+ * @param {'GET'|'PUT'|'POST'|'DELETE'} [options.method] POST/DELETE added
+ *   for files-lambda's routes (docs/file-storage-plan.md) - same HttpApi,
+ *   same wrapper, no reason for a second one
  * @param {string} [options.token] Cognito ID token (see docs/architecture.md
  *   §5 - the JWT authorizer trusts this token's `sub`, never a client-supplied one)
  * @param {object} [options.body]
