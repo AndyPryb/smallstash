@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>andriy.prybaten</groupId>
+  <artifactId>common</artifactId>
+  <version>0.1</version>
+  <packaging>jar</packaging>
+
+  <!--
+    Plain library jar shared by every Lambda module - not itself a Lambda
+    deployment artifact, so no shading and no micronaut.runtime property.
+    Still parents to micronaut-parent (same as vault-lambda) purely so
+    Micronaut dependency *versions* stay identical across modules without
+    hand-pinning them twice - see docs/file-storage-plan.md sec 3a: the
+    point of this module is a home for genuinely shared code (CurrentUser,
+    the ResourceNotFoundException family) plus guaranteed-matching versions,
+    not "shared JWT-checking code" - there was never any bespoke JWT logic
+    to share in the first place.
+  -->
+  <!-- Empty relativePath: without it, Maven's default guess is "../pom.xml"
+       relative to this file - which now resolves to the aggregator, not
+       micronaut-parent, since common/ sits inside the new repo-root
+       aggregator (see the warning this silences). Telling Maven explicitly
+       to resolve the parent from the repository (its groupId/artifactId/
+       version) rather than a relative path is the standard fix whenever an
+       external parent POM sits above a multi-module reactor. -->
+  <parent>
+    <groupId>io.micronaut.platform</groupId>
+    <artifactId>micronaut-parent</artifactId>
+    <version>5.1.0</version>
+    <relativePath/>
+  </parent>
+
+  <properties>
+    <jdk.version>25</jdk.version>
+    <release.version>25</release.version>
+    <micronaut.version>5.1.0</micronaut.version>
+  </properties>
+
+  <dependencies>
+    <!-- CurrentUser reads io.micronaut.security.authentication.Authentication. -->
+    <dependency>
+      <groupId>io.micronaut.security</groupId>
+      <artifactId>micronaut-security</artifactId>
+      <scope>compile</scope>
+    </dependency>
+
+    <!-- ResourceNotFoundExceptionHandler: @Singleton/@Requires/HttpRequest/
+         HttpResponse/@Produces/ExceptionHandler. -->
+    <dependency>
+      <groupId>io.micronaut</groupId>
+      <artifactId>micronaut-http</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.micronaut</groupId>
+      <artifactId>micronaut-http-server</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <!-- jakarta.inject-api (for @Singleton) deliberately not declared
+         directly: it isn't in micronaut-parent's BOM (no managed version),
+         and it arrives transitively via micronaut-http/micronaut-security
+         regardless. Confirmed by the build succeeding without it, not
+         assumed - see the actual compile run this was fixed against. -->
+  </dependencies>
+
+</project>

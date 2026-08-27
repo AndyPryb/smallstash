@@ -1,6 +1,7 @@
 <script>
   /**
-   * Exports the unlocked vault as a plaintext CSV.
+   * Exports the unlocked vault - and, since Phase 4
+   * (docs/file-storage-plan.md), every uploaded file - as plaintext.
    *
    * This is the one feature that deliberately breaks the app's central
    * promise: everywhere else, secrets are encrypted before they leave the
@@ -11,11 +12,35 @@
    * Recovery Key screen uses for the same reason: a consequence that can't
    * be undone once it has happened).
    *
-   * Everything happens in memory from the already-decrypted vault - the
-   * export makes no network calls and works offline.
+   * No longer offline/network-free: including files means fetching and
+   * decrypting each one (session.js's `downloadFile`) before anything can be
+   * written, since export.js stays synchronous/pure by design (see its
+   * header comment) and never fetches on its own.
+   *
+   * That raised a real risk worth naming: a picker dialog needs the click's
+   * "transient activation", which can expire during a slow multi-file fetch
+   * - if the picker were opened only after every file was downloaded, a
+   * large/slow file set could see the browser reject the picker outright.
+   * Avoided, not just documented: when a directory picker is available and
+   * there are files to include, `runExport` opens it *first*
+   * (`pickExportDirectory`) and only downloads/writes afterwards
+   * (`writeArtifactToDirectory`, streamed one file at a time rather than
+   * collected into an array first) - the picker consumes the activation
+   * while it's still fresh, so the fetch's length no longer matters. The
+   * other two cases don't have this exposure to begin with: a CSV-only
+   * export never awaits anything before its single `saveArtifacts` call, and
+   * the picker-less fallback uses `<a download>`, which needs no permission
+   * prompt and so isn't time-limited the same way.
    */
-  import { buildExportArtifacts } from '../export.js';
-  import { saveArtifact, supportsSaveFilePicker } from '../saveFile.js';
+  import { buildExportArtifacts, fileArtifactPaths } from '../export.js';
+  import {
+    saveArtifacts,
+    supportsSaveFilePicker,
+    supportsDirectoryPicker,
+    pickExportDirectory,
+    writeArtifactToDirectory,
+  } from '../saveFile.js';
+  import { listFiles, downloadFile } from '../session.js';
   import Alert from './Alert.svelte';
 
   /** @type {{ vaultDocument: { entries: object[] }, onclose: () => void }} */
@@ -40,23 +65,86 @@
   let outcome = $state('');
   let savedAs = $state('');
 
+  /** @type {import('../crypto/files.js').FileMetadata[]} */
+  let files = $state([]);
+  let filesLoadError = $state('');
+
   const entryCount = $derived(vaultDocument?.entries?.length ?? 0);
-  // Resolved once, at setup: this is a capability of the browser, and it
+  const fileCount = $derived(files.length);
+  const nothingToExport = $derived(entryCount === 0 && fileCount === 0);
+  // Resolved once, at setup: these are capabilities of the browser, and they
   // can't change while the panel is open.
   const canPickDestination = supportsSaveFilePicker();
+  const canPickDirectory = supportsDirectoryPicker();
+
+  // The files list is fetched eagerly (not just at export time) so the "what
+  // gets exported" summary below can name a real count instead of staying
+  // silent about files until the button is clicked - a listing call is cheap
+  // next to downloading every file's bytes, which only happens on export.
+  $effect(() => {
+    listFiles()
+      .then((list) => {
+        files = list;
+      })
+      .catch((err) => {
+        filesLoadError = err.message ?? String(err);
+      });
+  });
+
+  /**
+   * Files-included export where a directory picker exists: opens it first
+   * (still inside the click's transient activation, before any network
+   * call), then downloads and writes each file one at a time, plus the CSV.
+   * See this component's header comment for why the ordering matters.
+   */
+  async function runExportStreamed() {
+    const rootHandle = await pickExportDirectory();
+    if (rootHandle === null) {
+      outcome = 'cancelled';
+      return;
+    }
+
+    const [csvArtifact] = buildExportArtifacts(vaultDocument, new Date(), { includeBom: excelMarker, files: [] });
+    await writeArtifactToDirectory(rootHandle, csvArtifact);
+
+    const paths = fileArtifactPaths(files);
+    for (let i = 0; i < files.length; i += 1) {
+      const { mimeType, bytes } = await downloadFile(files[i].id);
+      await writeArtifactToDirectory(rootHandle, { path: paths[i], contents: bytes, mimeType });
+    }
+
+    savedAs = `${1 + files.length} files`;
+    outcome = 'saved';
+  }
+
+  /**
+   * Every other case: no files to include (nothing gated on activation
+   * timing to begin with), or files but no directory picker (falls back to
+   * `<a download>`, which isn't activation-limited either). Builds the full
+   * artifact list up front, same as before Phase 4's streaming path existed.
+   */
+  async function runExportBuffered() {
+    const downloaded = [];
+    for (const file of files) {
+      downloaded.push(await downloadFile(file.id));
+    }
+    const artifacts = buildExportArtifacts(vaultDocument, new Date(), { includeBom: excelMarker, files: downloaded });
+    savedAs = artifacts.length === 1 ? artifacts[0].path : `${artifacts.length} files`;
+    outcome = await saveArtifacts(artifacts);
+  }
 
   async function runExport() {
     error = '';
     outcome = '';
     busy = true;
     try {
-      // Built synchronously before any await, so the click's transient
-      // activation is still valid when the save picker is opened.
-      const [artifact] = buildExportArtifacts(vaultDocument, new Date(), { includeBom: excelMarker });
-      savedAs = artifact.path;
-      outcome = await saveArtifact(artifact);
+      if (fileCount > 0 && canPickDirectory) {
+        await runExportStreamed();
+      } else {
+        await runExportBuffered();
+      }
     } catch (err) {
-      error = err?.message ?? String(err);
+      error = err.message ?? String(err);
     } finally {
       busy = false;
     }
@@ -70,10 +158,18 @@
     <Alert variant="error" ondismiss={() => (error = '')}>{error}</Alert>
   {/if}
 
+  {#if filesLoadError}
+    <Alert variant="error" ondismiss={() => (filesLoadError = '')}>
+      Couldn't load your files list, so the export below will only include your {entryCount === 1 ? 'entry' : 'entries'}:
+      {filesLoadError}
+    </Alert>
+  {/if}
+
   {#if outcome === 'saved' || outcome === 'downloaded'}
     <Alert variant="success">
       Exported {entryCount}
-      {entryCount === 1 ? 'entry' : 'entries'} to <strong>{savedAs}</strong>.
+      {entryCount === 1 ? 'entry' : 'entries'}{#if fileCount > 0}
+        and {fileCount} {fileCount === 1 ? 'file' : 'files'}{/if} to <strong>{savedAs}</strong>.
       {#if outcome === 'downloaded'}
         Check your device's Downloads folder.
       {/if}
@@ -103,12 +199,18 @@
       <p class="detail-label">What gets exported</p>
       <ul>
         <li>All <strong>{entryCount}</strong> {entryCount === 1 ? 'entry' : 'entries'}, including passwords and notes, as a CSV file.</li>
+        {#if fileCount > 0}
+          <li>All <strong>{fileCount}</strong> {fileCount === 1 ? 'file' : 'files'} from your Files tab, decrypted, under a <code>files/</code> folder.</li>
+        {/if}
         <li>Your Master Password and Recovery Key are <strong>not</strong> included - they're not stored anywhere to export.</li>
         <li>
-          {#if canPickDestination}
+          {#if fileCount > 0 && canPickDirectory}
+            You'll be asked to choose a destination folder - the CSV and every file are written into it together.
+          {:else if canPickDestination}
             You'll be asked where to save it.
           {:else}
-            It will be saved to this device's Downloads folder - this browser can't offer a "save as" dialog.
+            {fileCount > 0 ? 'Each item' : 'It'} will be saved to this device's Downloads folder - this browser can't
+            offer a "save as" dialog.
           {/if}
         </li>
       </ul>
@@ -146,14 +248,14 @@
     </label>
 
     <div class="actions">
-      <button type="button" class="primary" disabled={!acknowledged || busy || entryCount === 0} onclick={runExport}>
-        {busy ? 'Exporting…' : 'Export as CSV'}
+      <button type="button" class="primary" disabled={!acknowledged || busy || nothingToExport} onclick={runExport}>
+        {busy ? 'Exporting…' : fileCount > 0 ? 'Export' : 'Export as CSV'}
       </button>
       <button type="button" onclick={onclose} disabled={busy}>Cancel</button>
     </div>
 
-    {#if entryCount === 0}
-      <p class="hint">There's nothing to export yet - add an entry first.</p>
+    {#if nothingToExport}
+      <p class="hint">There's nothing to export yet - add an entry or upload a file first.</p>
     {/if}
   {/if}
 </div>

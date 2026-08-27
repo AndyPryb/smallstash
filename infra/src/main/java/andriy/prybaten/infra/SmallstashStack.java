@@ -70,6 +70,8 @@ import software.amazon.awscdk.services.sns.subscriptions.EmailSubscription;
 import software.amazon.awscdk.services.s3.BlockPublicAccess;
 import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.BucketEncryption;
+import software.amazon.awscdk.services.s3.CorsRule;
+import software.amazon.awscdk.services.s3.HttpMethods;
 import software.amazon.awscdk.services.s3.LifecycleRule;
 import software.amazon.awscdk.services.s3.deployment.BucketDeployment;
 import software.amazon.awscdk.services.s3.deployment.Source;
@@ -178,6 +180,44 @@ public class SmallstashStack extends Stack {
                         .pointInTimeRecoveryEnabled(true)
                         .build())
                 .removalPolicy(dataRemovalPolicy)
+                .build();
+
+        // Files bucket (docs/file-storage-plan.md) - Phase 1. Separate from
+        // vaultBucket above (sec 6), deliberately unversioned: files are
+        // immutable-by-id (a new upload always gets a new fileId, never
+        // overwrites an existing key), and "deletion means deletion"
+        // (decision 5) is a goal, not something to route around - versioning
+        // would leave deleted content recoverable, fighting that goal. On an
+        // unversioned bucket, s3:DeleteObject just deletes the object, so
+        // none of vaultBucket's DeleteObjectVersion concern (sec 6, why that
+        // Lambda's role has no delete permission at all) applies here - this
+        // is a different bucket with a different, equally deliberate
+        // posture, not an exception carved into the vault's.
+        //
+        // Constructed here (rather than nearer the HTTP API section its
+        // routes belong to) specifically so its own regional domain name -
+        // needed by the CSP below - is available before the CSP has to be
+        // built. Its CORS rule is attached later instead, via
+        // addCorsRule(...), once allowedOrigins (which needs the CloudFront
+        // distribution's domain name) actually exists - see that comment for
+        // the full ordering explanation.
+        Bucket filesBucket = Bucket.Builder.create(this, "FilesBucket")
+                .encryption(BucketEncryption.S3_MANAGED)
+                .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
+                .removalPolicy(dataRemovalPolicy)
+                .autoDeleteObjects(true)
+                // Orphan cleanup (sec 5): FilesController tags every object
+                // state=pending at upload time and flips it to state=live on
+                // commit. An upload whose commit never arrives (tab closed,
+                // network dropped) stays tagged pending forever otherwise -
+                // this rule is what actually reclaims that storage, without
+                // any server-side reconciliation job needed to notice it.
+                .lifecycleRules(List.of(LifecycleRule.builder()
+                        .id("ExpireAbandonedPendingUploads")
+                        .enabled(true)
+                        .tagFilters(Map.of("state", "pending"))
+                        .expiration(Duration.days(1))
+                        .build()))
                 .build();
 
         // ---------------------------------------------------------------
@@ -308,7 +348,11 @@ public class SmallstashStack extends Stack {
                 .handler("io.micronaut.function.aws.proxy.payload2.APIGatewayV2HTTPEventFunction")
                 // Built by `mvn package` in the repo root - see docs/architecture.md
                 // sec 9. Re-run that before every deploy; CDK doesn't build it for you.
-                .code(Code.fromAsset("../target/smallstash-0.1.jar"))
+                // Path updated for the Phase 0.5 multi-module restructuring
+                // (docs/file-storage-plan.md sec 3a): the repo root is now a
+                // reactor aggregator, and this jar comes from its
+                // vault-lambda/ child module, not the root itself.
+                .code(Code.fromAsset("../vault-lambda/target/vault-lambda-0.1.jar"))
                 .memorySize(512)
                 .timeout(Duration.seconds(30))
                 // !! NO reservedConcurrentExecutions - re-add once the
@@ -383,6 +427,89 @@ public class SmallstashStack extends Stack {
                 .build());
 
         // ---------------------------------------------------------------
+        // Files Lambda (docs/file-storage-plan.md sec 3a/8) - a second,
+        // independent function, not a route bolted onto `backend` above.
+        //
+        // Deliberately its own Function, hence its own execution role (CDK
+        // creates one per Function by default): the real payoff isn't
+        // isolating a JWT check that turns out to need no bespoke code
+        // either way (sec 3a's spike), it's that this role ends up with
+        // *zero* access to the vault bucket or the users table, full stop -
+        // not merely scoped narrowly within a shared role. A bug or
+        // compromise in files-serving code cannot touch vault data at the
+        // IAM layer, regardless of what the application code does.
+        //
+        // No JWT/authorizer wiring needed here at all: HttpApi's
+        // defaultAuthorizer (below) applies to every route added via
+        // addRoutes(...) regardless of which Lambda backs it - confirmed by
+        // decompiling micronaut-function-aws-api-proxy directly, not
+        // assumed (see docs/file-storage-plan.md sec 3a).
+        Function filesFunction = Function.Builder.create(this, "FilesFunction")
+                .functionName("smallstash-files")
+                .runtime(Runtime.JAVA_25)
+                .handler("io.micronaut.function.aws.proxy.payload2.APIGatewayV2HTTPEventFunction")
+                // Built by the same aggregator `mvn package` as the backend
+                // jar (docs/file-storage-plan.md sec 3a's Phase 0.5) - this
+                // one comes from the files-lambda/ child module.
+                .code(Code.fromAsset("../files-lambda/target/files-lambda-0.1.jar"))
+                .memorySize(512)
+                .timeout(Duration.seconds(30))
+                // No reservedConcurrentExecutions, same reasoning and same
+                // account-wide constraint as `backend` above - see the long
+                // comment there. Two Lambdas now share the same 10-execution
+                // account ceiling rather than one, which is itself a small
+                // additional argument for keeping both functions' workloads
+                // light; nothing here changes that math meaningfully at this
+                // app's real traffic.
+                .logGroup(LogGroup.Builder.create(this, "FilesFunctionLogGroup")
+                        .logGroupName("/aws/lambda/smallstash-files")
+                        .retention(RetentionDays.ONE_MONTH)
+                        .removalPolicy(RemovalPolicy.DESTROY)
+                        .build())
+                .environment(Map.of(
+                        "SMALLSTASH_FILES_BUCKET", filesBucket.getBucketName(),
+                        "MICRONAUT_ENVIRONMENTS", "lambda",
+                        "MICRONAUT_SECURITY_ENABLED", "true",
+                        // Same three values, sourced from the same CDK
+                        // objects as `backend`'s environment above - nothing
+                        // hand-retyped, nothing that can drift between the
+                        // two Lambdas' defense-in-depth JWT checks (sec 3a).
+                        "COGNITO_JWKS_URL", userPool.getUserPoolProviderUrl() + "/.well-known/jwks.json",
+                        "COGNITO_ISSUER", userPool.getUserPoolProviderUrl(),
+                        "COGNITO_CLIENT_ID", userPoolClient.getUserPoolClientId()))
+                .build();
+
+        // GetObject/PutObject/PutObjectTagging cover the files index blob
+        // and every file object's normal lifecycle (upload, tag flip on
+        // commit). DeleteObject is scoped tighter, to users/*/files/* only -
+        // the index blob itself is never deleted, only ever overwritten via
+        // PutObject, same as the vault. ListBucket is the one action this
+        // role needs that `backend`'s never did: FilesUsageService computes
+        // quota live by listing each user's files/ prefix rather than
+        // tracking a counter in DynamoDB (this Lambda has none - see below),
+        // and ListBucket is a bucket-level action in IAM terms, so it can't
+        // be scoped to an object-key pattern the way the others are;
+        // the s3:prefix condition is the closest available restriction,
+        // limiting what prefixes this role may list even though it can't
+        // limit which bucket.
+        filesFunction.addToRolePolicy(PolicyStatement.Builder.create()
+                .actions(List.of("s3:GetObject", "s3:PutObject", "s3:PutObjectTagging"))
+                .resources(List.of(filesBucket.getBucketArn() + "/users/*"))
+                .build());
+        filesFunction.addToRolePolicy(PolicyStatement.Builder.create()
+                .actions(List.of("s3:DeleteObject"))
+                .resources(List.of(filesBucket.getBucketArn() + "/users/*/files/*"))
+                .build());
+        filesFunction.addToRolePolicy(PolicyStatement.Builder.create()
+                .actions(List.of("s3:ListBucket"))
+                .resources(List.of(filesBucket.getBucketArn()))
+                .conditions(Map.of("StringLike", Map.of("s3:prefix", "users/*/files/*")))
+                .build());
+        // Deliberately no dynamodb:* statement at all - this Lambda never
+        // touches the users table. The files index is an S3 blob
+        // (docs/file-storage-plan.md sec 4), not a table row.
+
+        // ---------------------------------------------------------------
         // PWA hosting (web/dist -> S3, fronted by CloudFront)
         //
         // Bucket holds only the built static site (HTML/JS/CSS/wasm) - not
@@ -428,6 +555,15 @@ public class SmallstashStack extends Stack {
         // constructed, and HttpApi's CORS in turn needs this distribution's
         // domain name, so naming it exactly here would be a circular
         // dependency. Scoped to this region's API Gateway either way.
+        //
+        // The files bucket's own regional domain is added here too
+        // (docs/file-storage-plan.md sec 8) - named exactly, not wildcarded,
+        // since unlike the API endpoint the bucket already exists by this
+        // point in the stack and there's no circular-dependency reason not
+        // to. Without this, uploads fail looking like a network error, not
+        // a policy error - the same trap class as 'wasm-unsafe-eval' below.
+        // The vault bucket needs no equivalent entry: the browser never
+        // talks to it directly, only through the API (see architecture.md).
         String contentSecurityPolicy = String.join("; ",
                 "default-src 'self'",
                 "script-src 'self' 'wasm-unsafe-eval'",
@@ -436,7 +572,8 @@ public class SmallstashStack extends Stack {
                 "font-src 'self'",
                 "connect-src 'self'"
                         + " https://cognito-idp." + this.getRegion() + ".amazonaws.com"
-                        + " https://*.execute-api." + this.getRegion() + ".amazonaws.com",
+                        + " https://*.execute-api." + this.getRegion() + ".amazonaws.com"
+                        + " https://" + filesBucket.getBucketRegionalDomainName(),
                 "worker-src 'self'",
                 "manifest-src 'self'",
                 "object-src 'none'",
@@ -566,12 +703,35 @@ public class SmallstashStack extends Stack {
                 ? List.of("http://localhost:5173", "https://" + distribution.getDistributionDomainName())
                 : List.of("https://" + distribution.getDistributionDomainName());
 
+        // CORS on the files bucket (constructed earlier, alongside
+        // vaultBucket - see the comment there for why): the browser uploads
+        // file bytes directly to this bucket via a presigned URL (sec 3 -
+        // Lambda payload/API Gateway limits rule out routing bytes through
+        // the API), so it needs to be a valid fetch/XHR target from the
+        // PWA's own origin. Attached here via addCorsRule(...) rather than
+        // at construction time purely because this is the first point in
+        // the file allowedOrigins (which needs distribution's domain name)
+        // actually exists - CDK's Bucket construct supports configuring CORS
+        // after the fact for exactly this kind of ordering constraint.
+        // allowedHeaders("*") is required for the x-amz-tagging header
+        // FilesController signs into the presigned PUT (see that class's
+        // Javadoc for why it's PUT, not the POST the original plan called
+        // for) - a browser's CORS preflight has to see that header
+        // pre-approved before the real PUT is allowed to send it.
+        filesBucket.addCorsRule(CorsRule.builder()
+                .allowedOrigins(allowedOrigins)
+                .allowedMethods(List.of(HttpMethods.PUT, HttpMethods.GET))
+                .allowedHeaders(List.of("*"))
+                .exposedHeaders(List.of("ETag"))
+                .build());
+
         HttpUserPoolAuthorizer authorizer = new HttpUserPoolAuthorizer("CognitoAuthorizer", userPool,
                 HttpUserPoolAuthorizerProps.builder()
                         .userPoolClients(List.of(userPoolClient))
                         .build());
 
         HttpLambdaIntegration integration = new HttpLambdaIntegration("BackendIntegration", backend);
+        HttpLambdaIntegration filesIntegration = new HttpLambdaIntegration("FilesIntegration", filesFunction);
 
         HttpApi httpApi = HttpApi.Builder.create(this, "HttpApi")
                 .apiName("smallstash-api")
@@ -582,9 +742,16 @@ public class SmallstashStack extends Stack {
                 // domain name is a CloudFormation token resolved at deploy
                 // time within this same stack, so no manual step is needed
                 // once a real custom domain replaces it (see docs/todo.md).
+                //
+                // POST/DELETE added for the files routes below - the
+                // original GET/PUT/OPTIONS set covered only /vault and
+                // /keys, which never needed either verb.
                 .corsPreflight(CorsPreflightOptions.builder()
                         .allowOrigins(allowedOrigins)
-                        .allowMethods(List.of(CorsHttpMethod.GET, CorsHttpMethod.PUT, CorsHttpMethod.OPTIONS))
+                        .allowMethods(List.of(
+                                CorsHttpMethod.GET, CorsHttpMethod.PUT,
+                                CorsHttpMethod.POST, CorsHttpMethod.DELETE,
+                                CorsHttpMethod.OPTIONS))
                         .allowHeaders(List.of("Authorization", "Content-Type"))
                         .build())
                 .build();
@@ -599,6 +766,45 @@ public class SmallstashStack extends Stack {
                 .path("/keys")
                 .methods(List.of(HttpMethod.GET, HttpMethod.PUT))
                 .integration(integration)
+                .build());
+
+        // Files routes (docs/file-storage-plan.md sec 5) - all on
+        // filesIntegration, none of them touching `backend`. No per-route
+        // .authorizer(...) call: defaultAuthorizer above already covers
+        // every route added via addRoutes(...) regardless of which Lambda
+        // it integrates with (sec 3a).
+        httpApi.addRoutes(AddRoutesOptions.builder()
+                .path("/files-index")
+                .methods(List.of(HttpMethod.GET, HttpMethod.PUT))
+                .integration(filesIntegration)
+                .build());
+
+        httpApi.addRoutes(AddRoutesOptions.builder()
+                .path("/files")
+                .methods(List.of(HttpMethod.POST))
+                .integration(filesIntegration)
+                .build());
+
+        httpApi.addRoutes(AddRoutesOptions.builder()
+                .path("/files/{fileId}/commit")
+                .methods(List.of(HttpMethod.POST))
+                .integration(filesIntegration)
+                .build());
+
+        // Added while starting Phase 2 - the bucket is BLOCK_ALL public
+        // access, so nothing let a browser fetch file bytes without this.
+        // A genuine Phase 1 gap, found before it caused a problem rather
+        // than after (docs/file-storage-plan.md).
+        httpApi.addRoutes(AddRoutesOptions.builder()
+                .path("/files/{fileId}/url")
+                .methods(List.of(HttpMethod.GET))
+                .integration(filesIntegration)
+                .build());
+
+        httpApi.addRoutes(AddRoutesOptions.builder()
+                .path("/files/{fileId}")
+                .methods(List.of(HttpMethod.DELETE))
+                .integration(filesIntegration)
                 .build());
 
         // Explicit low throttle as cheap worst-case-cost insurance (real usage
@@ -846,6 +1052,7 @@ public class SmallstashStack extends Stack {
         CfnOutput.Builder.create(this, "UserPoolId").value(userPool.getUserPoolId()).build();
         CfnOutput.Builder.create(this, "UserPoolClientId").value(userPoolClient.getUserPoolClientId()).build();
         CfnOutput.Builder.create(this, "VaultBucketName").value(vaultBucket.getBucketName()).build();
+        CfnOutput.Builder.create(this, "FilesBucketName").value(filesBucket.getBucketName()).build();
         CfnOutput.Builder.create(this, "SiteUrl")
                 .value("https://" + distribution.getDistributionDomainName())
                 .build();

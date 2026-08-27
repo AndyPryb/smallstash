@@ -11,12 +11,16 @@
  * gated behind an explicit acknowledgement, and the resulting file has no
  * protection of any kind once written.
  *
- * The artifact list is intentionally a *list* even though there is exactly
- * one entry today. File attachments are planned (see docs/todo.md), and when
- * they land an export becomes "a CSV plus N files" - at which point the
- * writer switches from a single save dialog to a directory picker or an
- * archive. Designing that seam now means adding files is additive rather
- * than a rewrite of the export path.
+ * The artifact list was a *list* from the start, even when there was exactly
+ * one entry - so that adding uploaded files (docs/file-storage-plan.md
+ * Phase 4) could be additive rather than a rewrite. That prediction held:
+ * `buildExportArtifacts` below still only ever builds artifacts from data
+ * already in memory, and stays synchronous and network-free - the actual
+ * fetching/decrypting of file bytes happens in `session.js` (which already
+ * owns every other file network call) and `ExportPanel.svelte` passes the
+ * results in, already decrypted, as plain `{ name, mimeType, bytes }`
+ * objects - exactly `session.js`'s `downloadFile()` return shape, so no
+ * translation layer sits between the two.
  */
 
 /** Column order of the exported CSV. Also the header row. */
@@ -86,7 +90,68 @@ export function csvFileName(date) {
 export const BOM = '﻿';
 
 /**
+ * Makes every path in a list unique by appending `(1)`, `(2)`, ... before
+ * the extension of any repeat - two uploaded files can legitimately share a
+ * name (e.g. two different `receipt.pdf`s), and silently letting one
+ * overwrite the other during a directory-picker export would quietly lose
+ * data with no error to explain why the export has fewer files than the
+ * user uploaded.
+ *
+ * @param {string[]} paths in the order artifacts will be written
+ * @returns {string[]} same order, same length, all unique
+ */
+function deduplicatePaths(paths) {
+  const seen = new Map();
+  return paths.map((path) => {
+    const count = seen.get(path) ?? 0;
+    seen.set(path, count + 1);
+    if (count === 0) return path;
+    const dot = path.lastIndexOf('.');
+    return dot > 0 ? `${path.slice(0, dot)} (${count})${path.slice(dot)}` : `${path} (${count})`;
+  });
+}
+
+/**
+ * The `files/`-prefixed, deduplicated path each file will be written to -
+ * `files/` so a directory-picker export lands them alongside the CSV in a
+ * sub-folder rather than mixed in with it (`smallstash-export-....csv`
+ * reads as the one thing at the export's top level, with everything else
+ * organised under it).
+ *
+ * Exported separately from {@link fileArtifacts}/{@link buildExportArtifacts}
+ * so a caller can compute the final path for a file **before** its bytes
+ * are fetched - `ExportPanel.svelte` needs exactly that ordering to open a
+ * directory picker ahead of a slow multi-file download rather than after it
+ * (docs/file-storage-plan.md Phase 4's transient-activation note). Takes
+ * just `{ name }` for that reason - it deliberately doesn't need the rest of
+ * a file's metadata, only what's already known before download starts.
+ *
+ * @param {ReadonlyArray<{ name: string }>} files
+ * @returns {string[]} same order, same length as `files`
+ */
+export function fileArtifactPaths(files) {
+  return deduplicatePaths((files ?? []).map((f) => `files/${f.name}`));
+}
+
+/**
+ * Builds one export artifact per already-decrypted file.
+ *
+ * @param {ReadonlyArray<{ name: string, mimeType: string, bytes: Uint8Array }>} files
+ * @returns {Array<{ path: string, contents: Uint8Array, mimeType: string }>}
+ */
+function fileArtifacts(files) {
+  const paths = fileArtifactPaths(files);
+  return (files ?? []).map((f, i) => ({ path: paths[i], contents: f.bytes, mimeType: f.mimeType }));
+}
+
+/**
  * Everything an export writes to disk.
+ *
+ * `files`, if given, must already be decrypted - this function never fetches
+ * or decrypts anything itself (see this module's header comment for why).
+ * Omitting it or passing `[]` reproduces the exact CSV-only output this
+ * function always produced, byte for byte - existing callers with no files
+ * to add are unaffected.
  *
  * ### Why the BOM is a choice rather than always-on
  *
@@ -107,10 +172,10 @@ export const BOM = '﻿';
  *
  * @param {{ entries: ReadonlyArray<Record<string, unknown>> }} vaultDocument
  * @param {Date} [now]
- * @param {{ includeBom?: boolean }} [options]
- * @returns {Array<{ path: string, contents: string, mimeType: string }>}
+ * @param {{ includeBom?: boolean, files?: ReadonlyArray<{ name: string, mimeType: string, bytes: Uint8Array }> }} [options]
+ * @returns {Array<{ path: string, contents: string | Uint8Array, mimeType: string }>}
  */
-export function buildExportArtifacts(vaultDocument, now = new Date(), { includeBom = true } = {}) {
+export function buildExportArtifacts(vaultDocument, now = new Date(), { includeBom = true, files = [] } = {}) {
   const csv = entriesToCsv(vaultDocument?.entries ?? []);
   return [
     {
@@ -118,5 +183,6 @@ export function buildExportArtifacts(vaultDocument, now = new Date(), { includeB
       contents: includeBom ? `${BOM}${csv}` : csv,
       mimeType: 'text/csv;charset=utf-8',
     },
+    ...fileArtifacts(files),
   ];
 }

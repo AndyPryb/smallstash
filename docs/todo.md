@@ -621,6 +621,253 @@ runs; `micronaut-security-jwt` re-checks in-Lambda too, deliberately, as
 defense-in-depth on top. The plan doc's §1 table and §3a are corrected in
 place, not left stale - see there for the full rewrite.
 
+### ✅ Phase 0.5 done 2026-08-27 - Maven restructured, zero behaviour change
+
+On branch `feature/file-storage` (created 2026-08-27 off `master`, per the
+user's instruction to keep this whole feature isolated until it's polished
+- see file-storage-plan.md's top for branch policy). Uncommitted.
+
+`common`/`vault-lambda`/aggregator-root split done, `CurrentUser` and the
+`ResourceNotFoundException` family moved into `common` with git history
+preserved (`git mv`, confirmed as renames not delete+add). Verified as a true
+zero-behaviour-change refactor, not just "it compiled": the final shaded
+jar's class list diffs byte-for-byte identical against a pre-restructuring
+baseline build (21,266 classes, zero-line diff), three individual class
+files hash identical before/after including one from the moved module, and a
+clean local CDK synth shows the `BackendFunction`'s handler/runtime/memory/
+timeout/env-vars unchanged - only the asset hash differs, as expected for a
+rebuilt zip. Full method and evidence recorded in
+[file-storage-plan.md](file-storage-plan.md) §10 rather than duplicated here.
+
+`files-lambda` was deliberately **not** created in this step - no code for
+it yet, and wiring an empty module's `Function` into the stack is Phase 1
+scope. `SmallstashStack.java`'s jar path and `CLAUDE.md`'s repo map/cheat-
+sheet were updated in the same change rather than left stale.
+
+**Correction (2026-08-27, post-Phase-4)**: this originally said `mvn test`
+wasn't run because Docker was unavailable, checked via `docker info`. That
+check was a false negative - `docker` just isn't on this shell's `PATH`,
+which isn't the same as the engine being unreachable. `./mvnw test` (the
+actual check) reaches it fine and passes: `Tests run: 5, Failures: 0,
+Errors: 0, Skipped: 0` - both pre-existing LocalStack-backed tests.
+
+Not done: no `cdk deploy` (needs explicit per-instance confirmation
+regardless of how much local verification precedes it, per standing project
+rules).
+
+### ✅ Phase 1 done 2026-08-27 - files backend + infra, with one significant correction
+
+Same branch, still uncommitted. New `files-lambda` module (mirrors
+`vault-lambda`'s patterns deliberately - `FilesIndexController`/
+`S3FilesIndexRepository` are a close copy of `VaultController`/
+`S3VaultRepository`), new `FilesBucket` (unversioned, CORS, a lifecycle rule
+expiring abandoned `state=pending` uploads after 1 day), new `FilesFunction`
+with its own execution role, new `/files-index`/`/files`/`/files/{id}/commit`/
+`/files/{id}` routes.
+
+⚠️ **The plan's upload mechanism didn't survive contact with the actual
+SDK.** §3 called for presigned **POST** specifically for its
+`content-length-range` server-side size enforcement - but **AWS SDK v2's
+`S3Presigner` turns out to have no presigned-POST support at all**,
+confirmed by listing every class in the SDK's own
+`presigner.model` package rather than assumed. Hand-rolling AWS's raw
+POST-policy SigV4 signing was deliberately not attempted - too easy to get
+subtly wrong, with no live AWS or LocalStack available here to verify it
+against. **Shipped instead: presigned PUT**, with size/quota enforcement
+moved to `commit` time (checked against what S3 actually received, not what
+the client declared - oversized or over-quota objects get deleted
+immediately rather than accepted then left in place). Real enforcement,
+just after the fact rather than before it. Full record, including the exact
+evidence and the ordering puzzle this also created for the CSP/CORS
+construction sequence, in
+[file-storage-plan.md](file-storage-plan.md)'s "Phase 1" section - not
+duplicated here.
+
+Also resolved during implementation: the plan named DynamoDB's
+`UserProfile.storageBytesUsed` for quota, in tension with `files-lambda`
+having zero DynamoDB access. Resolved in favour of the stronger, more
+specific decision - usage is computed **live** via `s3:ListBucket` over each
+user's prefix, no ledger to keep in sync, one new IAM action not in the
+original §8 enumeration.
+
+**Verified**: all three backend modules build together; `vault-lambda`'s
+shaded jar is still byte-for-byte identical to the Phase 0.5 baseline
+(confirming Phase 1 didn't disturb it); `files-lambda`'s jar has its Lambda
+entry point and every bean's generated definition present; a clean local
+synth's template was read directly to confirm the bucket config, the new
+role's exactly-three-statements policy (no DynamoDB, no reference to
+`VaultBucket` anywhere), every new route's authorizer wiring (inherited
+automatically from `HttpApi`'s existing default, zero per-route code -
+exactly what the §3a spike predicted), the CORS methods, and the CSP.
+`BackendFunction`'s own policy was independently re-checked as unchanged.
+
+**Correction (2026-08-27, post-Phase-4)**: same wrong "Docker unavailable"
+claim as Phase 0.5's, corrected there. What was actually true at the time,
+and a real, separate gap: `files-lambda` had zero test files - not blocked
+by Docker or anything else, never written. **Closed the same day**: three
+new LocalStack integration test classes, mirroring `vault-lambda`'s existing
+pattern (`@MicronautTest`, `@Inject` the real bean, LocalStack via
+Micronaut's test-resources service) rather than inventing a new one -
+`S3FilesIndexRepositoryTest` (get/put round-trip, overwrite-not-append,
+not-found), `FilesUsageServiceTest` (summation, prefix-scoping so one user's
+usage never counts another's, pending-tagged objects still counting), and
+`FilesControllerTest` (mint's size-cap pre-check, commit's real HeadObject-
+based size enforcement **with a real 26 MiB oversized object**, the tagging
+flip to `live`, delete's idempotency). The ~500 MiB user quota's overflow
+branch is *not* exercised with real bytes - would mean actually storing that
+much data in LocalStack per test, impractical weight for a fast suite,
+documented as such rather than silently skipped; `FilesUsageServiceTest`'s
+summation coverage is the closest practical substitute. `./mvnw test`:
+**20/20** (5 pre-existing `vault-lambda`, 15 new `files-lambda`),
+`BUILD SUCCESS`.
+
+Not done: no `cdk deploy` (needs explicit confirmation, not requested yet).
+
+### ✅ Phase 2 done 2026-08-27 - client crypto + upload/download plumbing
+
+Same branch, still uncommitted. ⚠️ **Found and fixed a real Phase 1 gap
+before it caused a problem**: `FilesBucket` is `BLOCK_ALL` public access, and
+Phase 1 never added a way to fetch file bytes at all - §5's original route
+list simply never included a download endpoint, and Phase 1 was faithful to
+that list. Fixed as part of Phase 2: a new `GET /files/{fileId}/url` route,
+presigning a `GetObject` the same way `mint` presigns a `PutObject`.
+Re-verified with the same rigor as the rest of Phase 1 (clean compile, and
+the synthesized template confirms the new route carries the same JWT
+authorization as every other one).
+
+New `crypto/files.js` (DEK generate/wrap/unwrap + file/index encrypt-decrypt,
+all built on the *existing* `seal`/`open` envelope - no new crypto), new
+`api/filesIndex.js`/`api/files.js` (mirroring `api/client.js`'s shape for
+the JSON calls; the raw upload/download calls deliberately bypass
+`apiRequest` since they talk straight to a presigned S3 URL with no
+`Authorization` header and a binary body), and `session.js` gained
+`listFiles`/`uploadFile`/`downloadFile`/`removeFile` - same orchestration
+shape as `saveVault`/`changeMasterPassword`. Deliberately **no local
+caching** of files, unlike the vault - §0.7 already declined offline file
+access, so every function round-trips to the server.
+
+One acknowledged, documented gap: `removeFile` isn't transactional across
+its delete-then-save-index calls - a process dying between them leaves an
+orphaned index entry pointing at a now-gone object. Noted in the code, not
+silently accepted; a stale entry surfaces as a 404 on download today rather
+than being cleaned up automatically.
+
+**Verified**: real crypto throughout, mirroring how `crypto/vault.js` is
+treated in existing tests - only the network boundary is mocked. New
+`crypto/files.test.js` (round-trips, wrong-key-fails cases, the size cap,
+empty-index case) plus 12 new `session.test.js` tests covering all four
+orchestration functions, including a full encrypted-upload-then-download
+round trip through the mocked "server" that asserts the recovered bytes
+match the original plaintext exactly, and that uploaded bytes are genuinely
+ciphertext, not plaintext passed through. **161/161 tests pass** (149
+before this phase), `npm run build` clean. Full record in
+[file-storage-plan.md](file-storage-plan.md)'s "Phase 2" section.
+
+Not done: nothing UI-facing exists yet (Phase 3), and none of this has been
+exercised against a real deployed backend.
+
+### ✅ Phase 3 done 2026-08-27 - the Files tab
+
+Same branch, still uncommitted. New `FilesView.svelte`, a **sibling** to
+`VaultView.svelte`, not a merge into it - `VaultView` itself was **not
+touched at all**, zero regression risk to a component with extensive
+existing verification history. `FilesView` is also structurally simpler:
+there's no "Save vault"/dirty-tracking model, since `uploadFile`/
+`removeFile` (Phase 2) already round-trip to the server before returning,
+so nothing is ever unsaved. `FileListItem.svelte` mirrors `EntryListItem`'s
+card look but is much simpler - file metadata isn't a secret to mask, and
+nothing about a file is editable in place. New `formatFileSize.js` (6 new
+tests) for human-readable sizes, and App.svelte gained a Secrets/Files tab
+switcher, resetting to Secrets on sign-out and inactivity auto-lock.
+
+`saveFile.js` (built for CSV export) was **generalised** for arbitrary
+downloaded files, reused rather than copied - which surfaced two real bugs
+in it, not just a call-site change:
+
+- Its save-picker `types` filter was hardcoded to `text/csv` - harmless
+  while CSV was the only caller, wrong for a downloaded PDF or image. Now
+  derived from the artifact's own `mimeType`/`path`.
+- Fixing that surfaced a **second, pre-existing bug**: `export.js`'s real
+  `mimeType` is `'text/csv;charset=utf-8'`, and the picker's `accept` map
+  requires a bare MIME type with no parameters - passing the real value
+  through would have broken the *existing* CSV export's save dialog (the
+  old hardcoded `'text/csv'` had accidentally been dodging this). Fixed
+  with a small `bareMimeType()` helper; the CSV export's own behaviour is
+  unaffected, it was just quietly relying on the bug's absence by luck.
+
+**Verified**: `npm test` **167/167** (161 before this phase), warning-free
+build - including a real warning fixed, not ignored: `FileListItem`'s
+`uploadedOn` was a plain `const` reading a prop once, the exact same class
+of bug `Alert.svelte` had earlier in this project (Svelte's
+`state_referenced_locally`), fixed the same way with `$derived`. Visual
+verification via a temporary preview harness: `FileListItem` with
+realistic fake data (confirmed long-filename truncation actually
+truncates) and the `downloading` state, plus `FilesView` mounted with no
+session state to confirm its chrome renders sanely in that condition - a
+state a real user can hit (an expired token mid-session), not a contrived
+one. A fully populated `FilesView` (upload → list → download → delete
+against a live session) wasn't screenshotted - doing so would have needed
+briefly overwriting the *uncommitted* `session.js` with a fake, judged too
+risky for a temporary check. That data-layer path is already proven by
+Phase 2's `session.test.js` (real crypto, mocked network) - this phase's
+screenshots verify layout/CSS only, deliberately not claimed as more.
+Full record in [file-storage-plan.md](file-storage-plan.md)'s "Phase 3"
+section.
+
+Not done: Phase 4 (extending export to include files), and nothing in this
+feature has touched a real deployed backend.
+
+### ✅ Phase 4 done 2026-08-27 - export includes files
+
+Same branch, still uncommitted. `export.js` stayed pure/synchronous as
+designed - the artifact list was deliberately a list from the start so this
+could be additive - and gained a `files` option that spreads one artifact
+per uploaded file (as `files/name.ext`) onto the existing CSV-only list;
+omitting it reproduces the exact prior output byte-for-byte (tested). A real
+bug the file case surfaced that CSV alone couldn't: two files can share a
+name (two `receipt.pdf`s), which would have silently dropped one in a
+directory export - fixed with a new `deduplicatePaths()` helper (`receipt
+(1).pdf`, `receipt (2).pdf`, ...).
+
+`saveFile.js` gained `saveArtifacts` (plural) and `supportsDirectoryPicker`,
+alongside the unchanged `saveArtifact`/`supportsSaveFilePicker`: one
+artifact still delegates straight to `saveArtifact` (CSV-only export is
+byte-for-byte the same path it always was); multiple artifacts either go
+through one `showDirectoryPicker()` dialog (Chromium-desktop-only, same
+support boundary as `showSaveFilePicker` - confirmed via MDN) writing each
+into it preserving the `files/` subfolder, or fall back to a sequential loop
+of `saveArtifact` calls (which reuses its existing `<a download>` fallback,
+since a browser missing one picker API is missing the other too). No
+dedicated test file, consistent with Phase 3's precedent - `saveFile.js` is
+`document`/`Blob`/File-System-Access-shaped, which `node:test` can't exercise
+without a jsdom dependency this project doesn't have.
+
+`ExportPanel.svelte`: the "no network calls, works offline" claim in its
+header comment is now false and was rewritten to say so. UI: files list
+fetched eagerly on open for an accurate "what gets exported" summary;
+button/copy/empty-state now account for files as well as entries (a vault
+with 0 passwords but some files is exportable now).
+
+A real risk this raised was **fixed, not just documented** (2026-08-27,
+after a self-review pass): fetching/decrypting files before opening a
+picker could let a large/slow file set's transient activation expire before
+the picker opened. Fixed by reordering - when a directory picker is
+available and there are files to include, the picker now opens *first*
+(`pickExportDirectory`, new in `saveFile.js`), and files are downloaded and
+written one at a time straight into it (`writeArtifactToDirectory`)
+afterwards; a new `fileArtifactPaths()` in `export.js` lets the panel know
+each file's final path before its bytes exist. The other two export paths
+(no files, or files with no directory picker) were never exposed to this
+risk in the first place.
+
+**Verified**: `npm test` **173/173** (167 before this phase, 6 new tests -
+5 for the files-in-export feature, 1 for `fileArtifactPaths`), `npm run
+build` clean. Full record in
+[file-storage-plan.md](file-storage-plan.md)'s "Phase 4" section.
+
+Not done: nothing in this feature has touched a real deployed backend or a
+real browser (standing gap since Phase 0.5).
+
 ### ✅ File storage - spike done 2026-08-27: one open item resolved, now just a preference
 
 - [x] **Spike run**: does `micronaut-function-aws-api-proxy` (already a

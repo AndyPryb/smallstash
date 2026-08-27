@@ -23,6 +23,11 @@ import assert from 'node:assert/strict';
 
 import { createKeyMaterial, encryptVault, unlockWithMasterPassword, WrongSecretError } from './crypto/vault.js';
 import { cacheKeyMaterial, cacheVault, getCachedKeyMaterial, getCachedVault } from './cache/db.js';
+// Real class, not a mock: api/filesIndex.js and api/files.js both import
+// ApiError from api/client.js, and mock.module() below replaces that
+// module's *entire* export surface - without re-exporting the real ApiError
+// through the mock, those two modules would fail to import it at all.
+import { ApiError } from './api/client.js';
 
 // --- localStorage polyfill --------------------------------------------
 // Node has no native Web Storage. session.js's getLastAccount/
@@ -62,7 +67,23 @@ const apiMocks = {
   getVault: mock.fn(),
   putVault: mock.fn(),
 };
-mock.module('./api/client.js', { namedExports: apiMocks });
+mock.module('./api/client.js', { namedExports: { ...apiMocks, ApiError } });
+
+const filesIndexMocks = {
+  getFilesIndex: mock.fn(),
+  putFilesIndex: mock.fn(),
+};
+mock.module('./api/filesIndex.js', { namedExports: filesIndexMocks });
+
+const filesMocks = {
+  mintFileUpload: mock.fn(),
+  uploadFileBytes: mock.fn(),
+  commitFileUpload: mock.fn(),
+  getFileDownloadUrl: mock.fn(),
+  downloadFileBytes: mock.fn(),
+  deleteFile: mock.fn(),
+};
+mock.module('./api/files.js', { namedExports: filesMocks });
 
 mock.module('./config.js', {
   namedExports: {
@@ -127,7 +148,12 @@ beforeEach(() => {
   session.clearSession();
   // ...and every mock's call history/implementation, so one test's setup
   // can't leak into the next.
-  for (const fn of [...Object.values(cognitoMocks), ...Object.values(apiMocks)]) {
+  for (const fn of [
+    ...Object.values(cognitoMocks),
+    ...Object.values(apiMocks),
+    ...Object.values(filesIndexMocks),
+    ...Object.values(filesMocks),
+  ]) {
     if (typeof fn?.mock?.resetCalls === 'function') {
       fn.mock.resetCalls();
       fn.mock.mockImplementation(() => {
@@ -286,6 +312,230 @@ test('saveVault: encrypts, uploads, and refreshes the cache', async () => {
   assert.equal(apiMocks.putVault.mock.callCount(), 1);
   const cachedVault = await getCachedVault(sub);
   assert.equal(cachedVault.versionId, 'v2');
+});
+
+// --- files (docs/file-storage-plan.md) ----------------------------------
+// crypto/files.js runs for real here (same reasoning as crypto/vault.js
+// elsewhere in this file) - only the network boundary (api/filesIndex.js,
+// api/files.js) is mocked. That means these tests exercise a genuine
+// encrypt-then-decrypt round trip through the mocked "server", not just
+// that the right mock got called.
+
+/** A minimal File/Blob stand-in - only .name/.type/.arrayBuffer() are ever
+ * read by session.js, so a real File isn't needed (and isn't available in
+ * plain Node without extra setup). */
+function fakeFile(name, type, bytes) {
+  return { name, type, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+}
+
+test('listFiles: rejects with no active session', async () => {
+  await assert.rejects(() => session.listFiles(), /no active session/i);
+});
+
+test('listFiles: rejects while offline-unlocked', async () => {
+  const masterPassword = 'a master password';
+  const { sub } = await primeOfflineCache({ masterPassword });
+  await session.unlockOffline(sub, masterPassword);
+
+  await assert.rejects(() => session.listFiles(), /cannot list files while offline/i);
+});
+
+test('listFiles: returns an empty array when this user has never uploaded a files index', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => null);
+
+  assert.deepEqual(await session.listFiles(), []);
+});
+
+test('uploadFile: encrypts, uploads, commits, and adds an entry to a fresh index', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => null);
+  filesMocks.mintFileUpload.mock.mockImplementation(async () => ({
+    fileId: 'file-1',
+    upload: { url: 'https://example.invalid/upload', headers: { 'x-amz-tagging': 'state=pending' } },
+  }));
+  filesMocks.uploadFileBytes.mock.mockImplementation(async () => {});
+  filesMocks.commitFileUpload.mock.mockImplementation(async () => ({ sizeBytes: 42 }));
+  let savedCiphertextBase64;
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async (_token, ciphertextBase64) => {
+    savedCiphertextBase64 = ciphertextBase64;
+  });
+
+  const plaintext = new TextEncoder().encode('the actual file contents');
+  const entry = await session.uploadFile(fakeFile('doc.pdf', 'application/pdf', plaintext));
+
+  assert.equal(entry.id, 'file-1');
+  assert.equal(entry.name, 'doc.pdf');
+  assert.equal(entry.mimeType, 'application/pdf');
+  assert.equal(entry.sizeBytes, 42, 'must use commit\'s authoritative size, not a locally-computed one');
+  assert.equal(typeof entry.wrappedFileKey, 'string');
+
+  // uploadFileBytes must have received real ciphertext, not the plaintext.
+  const [, uploadedBytes] = filesMocks.uploadFileBytes.mock.calls[0].arguments;
+  assert.notEqual(Buffer.from(uploadedBytes).toString(), Buffer.from(plaintext).toString());
+
+  assert.ok(savedCiphertextBase64, 'putFilesIndex should have been called');
+  // The next test ("appends to an existing index") is what verifies the
+  // saved index's actual decrypted content - this one only checks that a
+  // save happened at all, to keep this test focused on the upload path.
+});
+
+test('uploadFile: appends to an existing index rather than replacing it', async () => {
+  const masterPassword = 'a master password';
+  const { vaultKey } = await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  const filesCrypto = await import('./crypto/files.js');
+  const existingEntry = {
+    id: 'existing-file',
+    name: 'old.txt',
+    mimeType: 'text/plain',
+    sizeBytes: 10,
+    wrappedFileKey: await filesCrypto.wrapFileKey(vaultKey, filesCrypto.generateFileKey()),
+    createdAt: new Date().toISOString(),
+  };
+  const existingCiphertext = await filesCrypto.encryptFilesIndex(vaultKey, { files: [existingEntry] });
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => ({
+    ciphertextBase64: existingCiphertext,
+    updatedAt: new Date().toISOString(),
+  }));
+  filesMocks.mintFileUpload.mock.mockImplementation(async () => ({
+    fileId: 'new-file',
+    upload: { url: 'https://example.invalid/upload', headers: {} },
+  }));
+  filesMocks.uploadFileBytes.mock.mockImplementation(async () => {});
+  filesMocks.commitFileUpload.mock.mockImplementation(async () => ({ sizeBytes: 5 }));
+  let savedCiphertextBase64;
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async (_token, ciphertextBase64) => {
+    savedCiphertextBase64 = ciphertextBase64;
+  });
+
+  await session.uploadFile(fakeFile('new.txt', 'text/plain', new TextEncoder().encode('hi')));
+
+  const savedDocument = await filesCrypto.decryptFilesIndex(vaultKey, savedCiphertextBase64);
+  assert.equal(savedDocument.files.length, 2);
+  assert.deepEqual(savedDocument.files[0], existingEntry);
+  assert.equal(savedDocument.files[1].id, 'new-file');
+});
+
+test('uploadFile: rejects with no active session, without minting an upload', async () => {
+  await assert.rejects(
+    () => session.uploadFile(fakeFile('x.txt', 'text/plain', new Uint8Array())),
+    /no active session/i,
+  );
+  assert.equal(filesMocks.mintFileUpload.mock.callCount(), 0);
+});
+
+test('uploadFile: rejects while offline-unlocked', async () => {
+  const masterPassword = 'a master password';
+  const { sub } = await primeOfflineCache({ masterPassword });
+  await session.unlockOffline(sub, masterPassword);
+
+  await assert.rejects(
+    () => session.uploadFile(fakeFile('x.txt', 'text/plain', new Uint8Array())),
+    /cannot upload files while offline/i,
+  );
+});
+
+test('downloadFile: fetches, decrypts, and returns the original plaintext', async () => {
+  const masterPassword = 'a master password';
+  const { vaultKey } = await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  const filesCrypto = await import('./crypto/files.js');
+  const fileKey = filesCrypto.generateFileKey();
+  const plaintext = new TextEncoder().encode('secret document contents');
+  const ciphertext = await filesCrypto.encryptFile(fileKey, plaintext);
+  const entry = {
+    id: 'file-1',
+    name: 'secret.txt',
+    mimeType: 'text/plain',
+    sizeBytes: ciphertext.byteLength,
+    wrappedFileKey: await filesCrypto.wrapFileKey(vaultKey, fileKey),
+    createdAt: new Date().toISOString(),
+  };
+  const indexCiphertext = await filesCrypto.encryptFilesIndex(vaultKey, { files: [entry] });
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => ({
+    ciphertextBase64: indexCiphertext,
+    updatedAt: new Date().toISOString(),
+  }));
+  filesMocks.getFileDownloadUrl.mock.mockImplementation(async () => ({ url: 'https://example.invalid/dl' }));
+  filesMocks.downloadFileBytes.mock.mockImplementation(async () => ciphertext);
+
+  const result = await session.downloadFile('file-1');
+
+  assert.equal(result.name, 'secret.txt');
+  assert.equal(result.mimeType, 'text/plain');
+  assert.equal(Buffer.from(result.bytes).toString(), Buffer.from(plaintext).toString());
+});
+
+test('downloadFile: rejects a file id that is not in the index', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => null);
+
+  await assert.rejects(() => session.downloadFile('does-not-exist'), /no files found/i);
+});
+
+test('removeFile: deletes via the API and drops the entry from the index', async () => {
+  const masterPassword = 'a master password';
+  const { vaultKey } = await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  const filesCrypto = await import('./crypto/files.js');
+  const toDelete = {
+    id: 'file-to-delete',
+    name: 'a.txt',
+    mimeType: 'text/plain',
+    sizeBytes: 1,
+    wrappedFileKey: await filesCrypto.wrapFileKey(vaultKey, filesCrypto.generateFileKey()),
+    createdAt: new Date().toISOString(),
+  };
+  const keep = { ...toDelete, id: 'file-to-keep' };
+  const indexCiphertext = await filesCrypto.encryptFilesIndex(vaultKey, { files: [toDelete, keep] });
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => ({
+    ciphertextBase64: indexCiphertext,
+    updatedAt: new Date().toISOString(),
+  }));
+  filesMocks.deleteFile.mock.mockImplementation(async () => {});
+  let savedCiphertextBase64;
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async (_token, ciphertextBase64) => {
+    savedCiphertextBase64 = ciphertextBase64;
+  });
+
+  await session.removeFile('file-to-delete');
+
+  assert.equal(filesMocks.deleteFile.mock.callCount(), 1);
+  assert.deepEqual(filesMocks.deleteFile.mock.calls[0].arguments.slice(1), ['file-to-delete']);
+  const savedDocument = await filesCrypto.decryptFilesIndex(vaultKey, savedCiphertextBase64);
+  assert.deepEqual(
+    savedDocument.files.map((f) => f.id),
+    ['file-to-keep'],
+  );
+});
+
+test('removeFile: rejects with no active session, without calling the delete API', async () => {
+  await assert.rejects(() => session.removeFile('anything'), /no active session/i);
+  assert.equal(filesMocks.deleteFile.mock.callCount(), 0);
+});
+
+test('removeFile: rejects while offline-unlocked', async () => {
+  const masterPassword = 'a master password';
+  const { sub } = await primeOfflineCache({ masterPassword });
+  await session.unlockOffline(sub, masterPassword);
+
+  await assert.rejects(() => session.removeFile('anything'), /cannot delete files while offline/i);
 });
 
 // --- changeMasterPassword ------------------------------------------------
