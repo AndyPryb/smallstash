@@ -740,6 +740,73 @@ practical substitute, since the quota check itself is simple arithmetic
 regardless of local verification, per standing project rules - not
 requested yet).
 
+### Phase 1 addendum #2 (2026-08-27) - a real `cdk deploy` failure, and what it means for "verified"
+
+⚠️ **A genuine bug shipped believing it was verified, because nothing used
+here had actually checked for it.** A real `cdk deploy` attempt (the
+`.env` invite code was already configured; deploy itself was run by the
+user, not by this agent unprompted) failed at changeset creation with
+`Circular dependency between resources`, listing ~35 of the stack's ~40
+resources.
+
+**Root cause**: a genuine two-node cycle at the CloudFormation resource
+level, not a Java construction-order issue this time (that one really was
+fixed in Phase 1, via `addCorsRule`). `SiteSecurityHeaders`' CSP embedded
+`filesBucket.getBucketRegionalDomainName()` exactly, making
+`SiteDistribution` (which consumes `SiteSecurityHeaders` as a
+`responseHeadersPolicy`) depend on `FilesBucket`. Meanwhile `FilesBucket`'s
+own CORS rule is built from `allowedOrigins`, which needs
+`distribution.getDistributionDomainName()` - so `FilesBucket` already
+depended on `SiteDistribution`, the other direction. Two resources each
+needing the other, and because so much of the stack sits downstream of one
+side or the other (every HTTP API route, both Lambdas' permissions, the
+site's own bucket policy and deployments), the cycle pulled in nearly
+everything.
+
+**Why local synth never caught this**: `CDK_OUTDIR=cdk.out ../mvnw compile
+exec:java` (this repo's usual "local synth" verification step, used and
+trusted through every phase above) just calls `app.synth()` and writes the
+cloud assembly - it does not perform the deploy-time dependency-graph
+resolution the real CDK CLI does when computing changeset order. `cdk
+synth` via the actual CDK CLI *also* doesn't catch it (verified directly:
+ran it after this fix, exit 0, no error) - the check only happens at `cdk
+deploy`'s changeset-creation step. **Practical consequence for this whole
+document**: every "local synth confirms X" claim in earlier phases was true
+as far as it went, but "confirmed by local synth" is not the same
+verification strength as "confirmed by `cdk deploy`" for anything
+involving cross-resource dependencies - worth remembering the next time
+something in this stack references another construct's token.
+
+**Fix**: the CSP already had a precedent for exactly this problem one line
+above - the API Gateway endpoint is deliberately wildcarded
+(`*.execute-api.<region>.amazonaws.com`) instead of named exactly, for this
+same reason. Applied the identical pattern to the files bucket entry
+(`*.s3.<region>.amazonaws.com`), removing the token reference to
+`filesBucket` from the CSP string entirely - `SiteSecurityHeaders` no
+longer depends on `FilesBucket` at all, breaking the cycle at its source.
+Deliberately did **not** touch the other edge (`FilesBucket`'s CORS
+`allowedOrigins`) - that one correctly needs the real, exact CloudFront
+origin; broadening it would be a real security loosening in exchange for
+nothing, unlike the CSP entry where the broader match was already an
+accepted tradeoff for the API endpoint.
+
+**Verified without deploying** (a deploy itself still needs separate
+explicit confirmation, per standing project rules, not given for this):
+read the synthesized template's resource graph directly rather than
+trusting the fix from source alone - confirmed `SiteSecurityHeaders`'
+`ContentSecurityPolicy` is now a plain literal string with no
+`Fn::GetAtt`/`Ref` into `FilesBucket` anywhere in it, confirmed
+`FilesBucket`'s `CorsConfiguration` still correctly `Fn::GetAtt`s
+`SiteDistribution`'s `DomainName` (the one edge that's supposed to stay),
+and walked every resource in the template for any remaining reference in
+either direction between the two - found none. The dependency is now
+one-directional (`FilesBucket` → `SiteDistribution` only), which is what a
+non-cyclic graph needs.
+
+**Not yet done**: an actual `cdk deploy` confirming this resolves the real
+changeset error, not just the template graph - the next deploy attempt is
+the real test.
+
 ### Phase 2 - what was actually done, and a Phase 1 gap it uncovered
 
 ⚠️ **A real gap in Phase 1, found before it caused a problem**: starting
