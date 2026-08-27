@@ -723,6 +723,43 @@ summation coverage is the closest practical substitute. `./mvnw test`:
 
 Not done: no `cdk deploy` (needs explicit confirmation, not requested yet).
 
+### ⚠️ Real `cdk deploy` circular-dependency failure, fixed 2026-08-27 - and a verification-strength lesson
+
+A real `cdk deploy` (run by the user) failed at changeset creation:
+`Circular dependency between resources`, listing ~35 resources. Genuine
+CloudFormation-level cycle, not a Java ordering bug: `SiteSecurityHeaders`'
+CSP named `filesBucket.getBucketRegionalDomainName()` exactly, making
+`SiteDistribution` depend on `FilesBucket`; `FilesBucket`'s own CORS rule
+already depended on `SiteDistribution`'s domain name the other way. Two
+resources needing each other, pulling in nearly the whole stack.
+
+**Neither local synth (`CDK_OUTDIR=... exec:java`) nor the real `cdk synth`
+CLI catches this** - confirmed directly, `cdk synth` exits 0 with the bug
+still present. The check only runs at `cdk deploy`'s changeset step. Every
+"local synth confirms X" claim across the file-storage phases was true as
+far as it went, but wasn't strong enough to catch a cross-resource cycle -
+worth remembering for anything that references another construct's token
+going forward.
+
+**Fixed** the same way the CSP already handles the API Gateway endpoint for
+the identical reason: wildcarded (`*.s3.<region>.amazonaws.com`) instead of
+naming `filesBucket`'s domain exactly, removing the token reference that
+created the cycle. The other edge (`FilesBucket`'s CORS needing the real,
+exact distribution origin) was deliberately left alone - broadening that
+one would be an actual security loosening, not a false economy like the
+already-accepted wildcard tradeoff on the CSP side.
+
+**Verified without deploying** (still needs separate explicit confirmation):
+read the synthesized template's resource graph directly - confirmed the CSP
+is now a plain string with no reference into `FilesBucket`, confirmed
+`FilesBucket`'s CORS still correctly references `SiteDistribution`, and
+walked every resource for any remaining reference either direction -
+found none. Full record in
+[file-storage-plan.md](file-storage-plan.md)'s "Phase 1 addendum #2".
+
+Not done: an actual `cdk deploy` to confirm this resolves the real
+changeset error, not just the template graph.
+
 ### ✅ Phase 2 done 2026-08-27 - client crypto + upload/download plumbing
 
 Same branch, still uncommitted. ⚠️ **Found and fixed a real Phase 1 gap

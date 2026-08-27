@@ -557,11 +557,40 @@ public class SmallstashStack extends Stack {
         // dependency. Scoped to this region's API Gateway either way.
         //
         // The files bucket's own regional domain is added here too
-        // (docs/file-storage-plan.md sec 8) - named exactly, not wildcarded,
-        // since unlike the API endpoint the bucket already exists by this
-        // point in the stack and there's no circular-dependency reason not
-        // to. Without this, uploads fail looking like a network error, not
-        // a policy error - the same trap class as 'wasm-unsafe-eval' below.
+        // (docs/file-storage-plan.md sec 8) - but WILDCARDED
+        // (*.s3.<region>.amazonaws.com), not named exactly, and this
+        // matters more than it looks like it should.
+        //
+        // ⚠️ Correction (found by an actual `cdk deploy` attempt, not local
+        // synth): naming filesBucket's regional domain exactly here creates
+        // a genuine CloudFormation-level circular dependency, not just a
+        // Java construction-order problem. filesBucket's own CORS rule
+        // (addCorsRule below) is built from `allowedOrigins`, which needs
+        // `distribution`'s domain name - so FilesBucket already depends on
+        // SiteDistribution. Naming filesBucket's domain exactly *here* makes
+        // SiteSecurityHeaders (and therefore SiteDistribution, which
+        // consumes it as a responseHeadersPolicy) depend on FilesBucket
+        // right back - a two-node cycle that drags in nearly every resource
+        // downstream of either side of it. `cdk deploy` refused to even
+        // create a changeset ("Circular dependency between resources",
+        // listing ~35 resources). Local synth (`CDK_OUTDIR=... exec:java`,
+        // this repo's usual verification step) never catches this class of
+        // bug - it emits the template without doing the deploy-time
+        // dependency-graph resolution the real CDK CLI does, so this shipped
+        // believing it was verified when it hadn't actually been exercised
+        // by anything that would have caught it. The same wildcard trick
+        // already used for the API endpoint below fixes it the same way: it
+        // removes the token reference to `filesBucket` entirely, so
+        // SiteSecurityHeaders no longer depends on it at all, breaking the
+        // cycle at its source rather than touching the CORS rule (which
+        // correctly does still need the real, exact distribution origin -
+        // broadening *that* side would be the wrong fix, a real security
+        // loosening for no reason). Broader than the minimum this app
+        // technically needs (matches every bucket in the account/region,
+        // not just filesBucket) - same accepted tradeoff already made for
+        // the API endpoint entry right below, for the identical reason.
+        // Without this, uploads fail looking like a network error, not a
+        // policy error - the same trap class as 'wasm-unsafe-eval' below.
         // The vault bucket needs no equivalent entry: the browser never
         // talks to it directly, only through the API (see architecture.md).
         String contentSecurityPolicy = String.join("; ",
@@ -573,7 +602,7 @@ public class SmallstashStack extends Stack {
                 "connect-src 'self'"
                         + " https://cognito-idp." + this.getRegion() + ".amazonaws.com"
                         + " https://*.execute-api." + this.getRegion() + ".amazonaws.com"
-                        + " https://" + filesBucket.getBucketRegionalDomainName(),
+                        + " https://*.s3." + this.getRegion() + ".amazonaws.com",
                 "worker-src 'self'",
                 "manifest-src 'self'",
                 "object-src 'none'",
