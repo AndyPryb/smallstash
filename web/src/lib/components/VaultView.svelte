@@ -55,11 +55,16 @@
    * unrepresentable instead of something each new toggle has to remember to
    * prevent.
    *
-   * @type {'master-password' | 'login-password' | 'export' | null}
+   * `new-entry` is in here rather than being always-on-screen: reading
+   * existing entries is the common visit, and a permanently expanded
+   * add-entry form pushed the list up and made every session look like it
+   * was asking you to create something.
+   *
+   * @type {'master-password' | 'login-password' | 'export' | 'new-entry' | null}
    */
   let openPanel = $state(null);
 
-  /** @param {'master-password' | 'login-password' | 'export'} panel */
+  /** @param {'master-password' | 'login-password' | 'export' | 'new-entry'} panel */
   function togglePanel(panel) {
     openPanel = openPanel === panel ? null : panel;
   }
@@ -136,6 +141,12 @@
     title = username = password = url = notes = '';
     showGenerator = false;
     showNewPassword = false;
+    // Collapse once the entry is added: the result is the row that just
+    // appeared in the list, and leaving an empty form open would recreate
+    // the always-expanded state this panel exists to avoid. Adding several
+    // in a row costs one click each - flip this line if that turns out to
+    // be the common case.
+    openPanel = null;
   }
 
   /* ---------------------------------------------------------------------
@@ -313,6 +324,17 @@
       <span class="dirty-indicator" class:visible={dirty} role="status">{dirty ? 'Unsaved changes' : ''}</span>
     </div>
     <div class="toolbar-actions">
+      <!-- "New entry" here, "Add entry" on the form's submit: two different
+           accessible names for two different actions, so neither a screen
+           reader nor a role-based query has to guess which is which. -->
+      <button
+        type="button"
+        class="compact"
+        aria-expanded={openPanel === 'new-entry'}
+        onclick={() => togglePanel('new-entry')}
+      >
+        New entry
+      </button>
       <button
         type="button"
         class="compact"
@@ -363,6 +385,56 @@
     <Alert variant="success" ondismiss={() => (saved = false)}>
       Vault saved - encrypted on this device before it was uploaded.
     </Alert>
+  {/if}
+
+  <!-- Rendered with the other panels rather than below the list, so it
+       appears immediately under the toolbar button that opened it. The
+       two change-password panels taught this lesson already: a panel
+       that opens far from its trigger reads as nothing having
+       happened. -->
+  {#if openPanel === 'new-entry'}
+  <form class="add-entry" onsubmit={addEntry}>
+    <h2>New entry</h2>
+    <!-- The manual-save model is the app's other non-obvious behaviour:
+         "Add entry" adds it to the list on screen, but nothing is stored
+         until "Save vault". Without saying so, a user can reasonably add
+         five entries, close the tab, and lose all of them. -->
+    <p class="hint">Adding puts the entry in the list below. Nothing leaves this browser until you press Save vault.</p>
+    <label class="field">Title <input bind:value={title} required /></label>
+    <label class="field">Username <input bind:value={username} /></label>
+    <label class="field">
+      Password
+      <span class="password-row">
+        <input type={showNewPassword ? 'text' : 'password'} bind:value={password} />
+        <!-- aria-labels name which form these belong to: an entry's edit
+             form has its own Show/Generate pair and can be open at the same
+             time as this one, which left two different controls sharing an
+             accessible name. Visible text stays short. -->
+        <button
+          type="button"
+          class="compact"
+          aria-label={showNewPassword ? 'Hide new entry password' : 'Show new entry password'}
+          onclick={() => (showNewPassword = !showNewPassword)}
+        >
+          {showNewPassword ? 'Hide' : 'Show'}
+        </button>
+        <button
+          type="button"
+          class="compact"
+          aria-label="Generate a password for the new entry"
+          onclick={() => (showGenerator = !showGenerator)}
+        >
+          Generate
+        </button>
+      </span>
+    </label>
+    {#if showGenerator}
+      <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
+    {/if}
+    <label class="field">URL <input bind:value={url} /></label>
+    <label class="field">Notes <ResizableTextarea bind:value={notes} label="the new entry's notes" /></label>
+    <button type="submit" class="primary">Add entry</button>
+  </form>
   {/if}
 
   {#if openPanel === 'master-password'}
@@ -416,48 +488,6 @@
        drag gives visually. -->
   <p class="sr-only" role="status" aria-live="polite">{reorderAnnouncement}</p>
 
-  <form class="add-entry" onsubmit={addEntry}>
-    <h2>Add entry</h2>
-    <!-- The manual-save model is the app's other non-obvious behaviour:
-         "Add entry" adds it to the list on screen, but nothing is stored
-         until "Save vault". Without saying so, a user can reasonably add
-         five entries, close the tab, and lose all of them. -->
-    <p class="hint">Adding puts the entry in the list above. Nothing leaves this browser until you press Save vault.</p>
-    <label class="field">Title <input bind:value={title} required /></label>
-    <label class="field">Username <input bind:value={username} /></label>
-    <label class="field">
-      Password
-      <span class="password-row">
-        <input type={showNewPassword ? 'text' : 'password'} bind:value={password} />
-        <!-- aria-labels name which form these belong to: an entry's edit
-             form has its own Show/Generate pair and can be open at the same
-             time as this one, which left two different controls sharing an
-             accessible name. Visible text stays short. -->
-        <button
-          type="button"
-          class="compact"
-          aria-label={showNewPassword ? 'Hide new entry password' : 'Show new entry password'}
-          onclick={() => (showNewPassword = !showNewPassword)}
-        >
-          {showNewPassword ? 'Hide' : 'Show'}
-        </button>
-        <button
-          type="button"
-          class="compact"
-          aria-label="Generate a password for the new entry"
-          onclick={() => (showGenerator = !showGenerator)}
-        >
-          Generate
-        </button>
-      </span>
-    </label>
-    {#if showGenerator}
-      <PasswordGeneratorPanel onuse={useGeneratedPassword} onclose={() => (showGenerator = false)} />
-    {/if}
-    <label class="field">URL <input bind:value={url} /></label>
-    <label class="field">Notes <ResizableTextarea bind:value={notes} label="the new entry's notes" /></label>
-    <button type="submit" class="primary">Add entry</button>
-  </form>
 </div>
 
 <style>
@@ -558,6 +588,9 @@
     background: var(--ss-surface);
     border: 1px solid var(--ss-border);
     border-radius: var(--ss-radius-lg);
+    /* Matches the other toolbar panels - it's now one of them, opened the
+       same way and rendered in the same place. */
+    box-shadow: var(--ss-shadow-2);
   }
 
   h2 {
