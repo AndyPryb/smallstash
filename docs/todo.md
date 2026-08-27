@@ -563,61 +563,144 @@ Idea: let a vault entry hold a document/file attachment (e.g. a scanned
 ID, a recovery-codes printout), not just text fields. Raised in
 conversation only - not scoped yet.
 
-### 📋 Full plan written 2026-08-27: [file-storage-plan.md](file-storage-plan.md)
+### 📋 Full plan: [file-storage-plan.md](file-storage-plan.md) - 9 of 10 questions answered 2026-08-27
 
 A deep read of the existing backend, infra and client, plus the architecture
-this feature needs. **Nothing is implemented.** Read that document before
-starting; the headlines are:
+this feature needs. **Nothing is implemented.** The user answered nine of the
+ten open questions in the same session; one remains, below. Read the plan doc
+before starting - the headlines, updated for the answers:
 
 - Files cannot go through the API at all. **Lambda's synchronous payload limit
   is 6 MB and API Gateway's is 10 MB** (verified, not assumed), and Micronaut
   here is set to 1 MB with Base64 inflating bodies by a third. The browser
   must upload **directly to S3 via presigned URLs**; the backend only mints
-  them. Recommended specifically **presigned POST**, because its signed
-  `content-length-range` is the only variant where the *server* can enforce a
-  size limit it didn't carry the bytes for.
+  them. **Presigned POST**, agreed - its signed `content-length-range` is the
+  only variant where the *server* can enforce a size limit it didn't carry the
+  bytes for. **Neither PUT nor POST is single-use** - checked against AWS's
+  own docs, a presigned URL is reusable for its full lifetime by design; the
+  real boundary is a short TTL, not one-time use.
+- Files are **standalone documents** (decision 4), not attached to entries -
+  own "Files" tab in the UI. That means they don't need a foothold in the
+  vault blob at all: proposed a **second encrypted index blob**,
+  `files-index.json.enc`, mirroring `vault.json.enc`'s GET/PUT pattern
+  exactly. **The existing vault blob and its 512 KiB cap are untouched by this
+  feature.**
 - Per-file data key, **wrapped by the Vault Key, not the Master Key** - so
   changing the Master Password (which only re-wraps the Vault Key) doesn't
   have to re-wrap every file, and the Recovery Key reaches files for free.
-- **Two infra gaps that will look like bugs if missed**: the vault bucket has
-  **no CORS configuration at all**, and the CSP's `connect-src` has no S3
-  origin. Either one makes uploads fail looking like a network error rather
-  than a policy error.
-- **The quota work that was dropped from Phase 1 has to come back.** It was
-  retired because per-user storage was bounded at ~2 MB by the 512 KiB vault
-  cap - true then, false the moment files exist. `UserProfile.storageBytesUsed`
-  already exists in the model, unused.
-- **Deleting a file touches a deliberate security control**: the Lambda has no
-  `s3:DeleteObject`, removed on purpose so it cannot destroy the vault's
-  version history. See the plan for the three options.
+- **Separate, unversioned bucket** (decision 6) - and unversioned turns out to
+  matter beyond "less coupling": versioning would fight "deletion means
+  deletion" (decision 5), so the new bucket gets `s3:DeleteObject` scoped to
+  `users/*/files/*` with none of the `DeleteObjectVersion` concern that keeps
+  the *vault* bucket's Lambda role without delete permission. The vault
+  bucket's IAM is untouched.
+- Two infra gaps that will look like bugs if missed: the new bucket needs its
+  own **CORS configuration**, and the CSP's `connect-src` needs the new
+  bucket's S3 origin added. Either one missing makes uploads fail looking like
+  a network error rather than a policy error.
+- **Quota enforcement comes back**, against the agreed ~500 MB/user (decision
+  2). It was dropped from Phase 1 because storage was bounded at ~2 MB by the
+  vault cap alone - false the moment files exist.
+  `UserProfile.storageBytesUsed` already exists in the model, unused.
+- **No `cdk destroy` required** (decision 9 resolved) - a new bucket, new IAM
+  statements on the existing role, and new routes are all additive
+  CloudFormation changes, deployable the same way the frontend-only work has
+  shipped so far.
+- **Export gets extended to include files, plaintext** (decision 8) -
+  `buildExportArtifacts` already returns a list specifically so this would be
+  additive; that moment has arrived.
 
-### ❓ File storage - questions to answer (blocking Phase 0)
+### ⚠️ Correction (2026-08-27): the plan's Lambda-count reasoning was built on a wrong claim
 
-Recommendations in brackets; these need a decision, not necessarily a debate.
+The earlier version of this section, and of file-storage-plan.md §1/§3a, said
+"there is no API Gateway authorizer in this stack." **That was wrong** - the
+stack already has `HttpUserPoolAuthorizer` set as `HttpApi`'s
+`.defaultAuthorizer()` (`SmallstashStack.java`), live and deployed. Every
+request is already validated against Cognito by API Gateway before any Lambda
+runs; `micronaut-security-jwt` re-checks in-Lambda too, deliberately, as
+defense-in-depth on top. The plan doc's §1 table and §3a are corrected in
+place, not left stale - see there for the full rewrite.
 
-- [ ] **1. Per-file size cap?** [proposal: 25 MB]
-- [ ] **2. Per-user total quota?** [proposal: 1 GB]
-- [ ] **3. Allowed file types** - anything, or a constrained list?
-      [recommend: anything - refusing a `.p12` defeats the purpose]
-- [ ] **4. Attached to an entry only, or also standalone documents?** Changes
-      the vault schema and the UI shape.
-- [ ] **5. Deletion: immediate or eventual?** [recommend: immediate, via
-      `s3:DeleteObject` scoped to `users/*/files/*` so the vault blob itself
-      stays undeletable - "your private key will be gone in 7 days" is a poor
-      answer]
-- [ ] **6. Same bucket + `files/` prefix, or a separate bucket?**
-      [recommend: same bucket - IAM is already prefix-scoped]
-- [ ] **7. Offline file access** - pin per file, cache on download, or never?
-      Note iOS evicts storage for non-installed PWAs after ~7 days of disuse.
-- [ ] **8. Should the plaintext export include files?** It would write private
-      keys to disk unencrypted - consistent with the existing export, but a
-      sharper edge. Possibly a separate opt-in.
-- [ ] **9. Re-affirm `RemovalPolicy.DESTROY`.** The accepted-risk decision on
-      record was about vaults. A `cdk destroy` would now also delete
-      irreplaceable documents - a different kind of loss from a re-derivable
-      password entry. Worth re-affirming knowingly rather than inheriting.
-- [ ] **10. Chunked/streaming encryption now, or whole-file behind a cap?**
-      [recommend: later - the envelope's version byte leaves room]
+### ✅ File storage - spike done 2026-08-27: one open item resolved, now just a preference
+
+- [x] **Spike run**: does `micronaut-function-aws-api-proxy` (already a
+      dependency) turn API-Gateway-pre-validated JWT claims into a Micronaut
+      `Authentication` automatically? **Yes, confirmed by decompiling the
+      actual dependency jar** (`javap -v` on the class file, not just docs).
+      It contains `MicronautLambdaAuthenticationFetcher`
+      (`@Singleton @Requires(classes = AuthenticationFetcher.class)`, active
+      purely by classpath presence), whose bytecode reads
+      `event.getRequestContext().getAuthorizer().getJwt().getClaims()` and
+      calls `Authentication.build(claims.get("sub"), claims)` - exactly the
+      shape the existing authorizer already produces, and exactly what
+      `CurrentUser.subOf()` (`authentication.getName()`) already reads.
+      **No code changes needed anywhere in `CurrentUser`, `VaultController`,
+      or `KeysController` for a second Lambda to authenticate correctly.**
+- [x] **Decided: two Lambdas**, sharing a new `common` Maven module. Since
+      `.defaultAuthorizer()` applies API-wide, including routes added later
+      via `addRoutes(...)`, the second Lambda inherits the exact same Cognito
+      validation automatically, with zero new auth code - the original
+      objection to splitting is gone, and the user's standing preference for
+      two Lambdas stands.
+      **The actual "duplication" to eliminate turned out to be smaller than
+      first framed**: the JWT-checking logic itself lives entirely inside
+      `micronaut-security-jwt` (third-party, nothing bespoke to duplicate),
+      and both Lambdas' `COGNITO_JWKS_URL`/`ISSUER`/`CLIENT_ID` values already
+      come from the same CDK `userPool`/`userPoolClient` objects, so there's
+      no hand-retyped value to drift. What a shared `common` module actually
+      buys: a single home for genuinely reusable code (`CurrentUser` moves
+      there) and, via a shared parent POM's `<dependencyManagement>`,
+      **guaranteed-identical dependency versions** across both Lambdas -
+      the more meaningful drift risk for security-sensitive code than the
+      config values ever were.
+      **Real security upside of splitting, not just isolation-in-the-abstract**:
+      each Lambda gets its own IAM execution role by default. The files
+      Lambda's role would have **zero** access to the vault bucket or the
+      DynamoDB users table, full stop - stronger than "scoped narrowly within
+      a shared role," since a shared Lambda's one role would necessarily be
+      the *union* of both permission sets.
+      **Sequencing matters**: the Maven restructuring (aggregator +
+      `common` + `vault-lambda` + `files-lambda`) is proposed as its own
+      first step - Phase 0.5, deployable, verified to be a zero-behaviour-
+      change refactor of the existing vault/keys Lambda before any
+      files-specific code lands on top of it. Touches three coordinated
+      places: `infra/cdk.json`'s app command (stays one command, since
+      `mvn package` at an aggregator root builds every module), the CDK
+      `Function` code asset path(s) (one jar becomes two), and CLAUDE.md's
+      dev cheat-sheet, which currently documents the single-jar output path
+      and would otherwise go stale.
+- [x] **TTL for presigned URLs: 5 minutes**, confirmed. Not single-use by
+      design (checked against AWS docs) - the TTL is the real boundary.
+- [x] **Clarified, not a new decision**: deferring chunked/streaming
+      encryption (item 10) does **not** mean files go unencrypted. Every file
+      is still fully client-side AES-256-GCM'd before upload, via a per-file
+      key wrapped by the Vault Key - "deferred" refers only to *how* very
+      large files would be encrypted (whole-file in one WebCrypto call, vs.
+      processed in chunks), which only matters well above the agreed 25 MB
+      cap. See the plan doc's reworded §4 for the disambiguated version.
+
+### ✅ File storage - answered 2026-08-27
+
+1. **Per-file size cap: 25 MB.**
+2. **Per-user total quota: ~500 MB.**
+3. **Allowed file types: anything.**
+4. **Standalone documents**, not attached to entries - a dedicated "Files" tab
+   alongside "Secrets". Drove the files-index-blob design above.
+5. **Deletion: immediate.** `s3:DeleteObject` scoped to
+   `<files-bucket>/users/*/files/*` only.
+6. **Separate bucket**, not a prefix on the vault bucket - and it should be
+   **unversioned** (a refinement that fell out of combining this with
+   decision 5: versioning would work against "deletion means deletion").
+7. **No offline file access.** Export (decision 8) covers the
+   without-a-connection case instead.
+8. **Yes, export includes files** - plaintext, saved to the device, the
+   user's responsibility from that point on. Same acknowledgement-gated
+   pattern the CSV export already uses.
+9. **No `cdk destroy` needed** to build this - confirmed, see the plan doc
+   §0.9. Every change is additive.
+10. **Chunked/streaming encryption: later.** WebCrypto AES-GCM needs the whole
+    file in memory (~2x the file size at peak); fine at the 25 MB cap,
+    deferred until there's a reason to raise it.
 
 ### Storage model - decided 2026-08-26: separate per-file S3 objects
 
