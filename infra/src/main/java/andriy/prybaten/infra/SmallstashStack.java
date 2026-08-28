@@ -55,7 +55,6 @@ import software.amazon.awscdk.services.dynamodb.AttributeType;
 import software.amazon.awscdk.services.dynamodb.BillingMode;
 import software.amazon.awscdk.services.dynamodb.PointInTimeRecoverySpecification;
 import software.amazon.awscdk.services.dynamodb.Table;
-import software.amazon.awscdk.services.lambda.Alias;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
 import software.amazon.awscdk.services.iam.Effect;
@@ -64,7 +63,6 @@ import software.amazon.awscdk.services.iam.PolicyStatement;
 import software.amazon.awscdk.services.iam.Role;
 import software.amazon.awscdk.services.iam.ServicePrincipal;
 import software.amazon.awscdk.services.lambda.Runtime;
-import software.amazon.awscdk.services.lambda.SnapStartConf;
 import software.amazon.awscdk.services.logs.LogGroup;
 import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.sns.Topic;
@@ -357,26 +355,25 @@ public class SmallstashStack extends Stack {
                 .code(Code.fromAsset("../vault-lambda/target/vault-lambda-0.1.jar"))
                 .memorySize(512)
                 .timeout(Duration.seconds(30))
-                // SnapStart (2026-08-28): eliminates the ~6s Java/Micronaut
-                // cold start observed live on this exact function (real
-                // CloudWatch Init Duration entries, not a guess) - free for
-                // Java runtimes (confirmed against AWS's own SnapStart
-                // pricing docs, unlike Python/.NET which do carry a per-
-                // version caching charge), available in eu-west-1, and
-                // Java 25 is a supported runtime. Only works on published
-                // versions/aliases, never $LATEST - see the BackendAlias
-                // below, which is what HttpApi's route actually integrates
-                // with now instead of this Function directly. Considered
-                // and rejected: an EventBridge-scheduled warm-up ping. Two
-                // problems SnapStart doesn't have - it would need either a
-                // new *unauthenticated* route (real new attack surface, the
-                // opposite of this stack's general instinct) or a direct
-                // Lambda-invoke path with its own code branch to detect and
-                // no-op a synthetic ping, plus a recurring schedule to
-                // reason about going forward. SnapStart needs none of that:
-                // no new route, no new invocation traffic, nothing for an
-                // unauthorized caller to trigger.
-                .snapStart(SnapStartConf.ON_PUBLISHED_VERSIONS)
+                // SnapStart was tried here (2026-08-28) and reverted the same
+                // day - real CloudWatch numbers after deploying it showed
+                // Restore Duration was genuinely fast (~1.1s, down from the
+                // ~6s Init Duration it replaced), but the first real request
+                // against a freshly-restored environment still cost ~10.5s
+                // of handler-level latency: SnapStart preserves loaded
+                // classes/state but not JIT-compiled code, so Micronaut's
+                // routing/security hot paths still had to JIT-compile from
+                // scratch on that first request. Total wall-clock latency
+                // (restore + first request) came out roughly the same as
+                // before, not better. AWS's own fix is "priming" - exercising
+                // representative request paths in a beforeCheckpoint hook so
+                // the JIT-compiled code is baked into the snapshot itself -
+                // but that's real extra engineering (CRaC hooks, picking
+                // representative paths, verifying nothing latent leaks into
+                // the shared snapshot), disproportionate to what a personal
+                // app with "a handful of requests every few days" traffic
+                // actually needs. Worth reconsidering only if that priming
+                // work gets done properly - see docs/todo.md.
                 // !! NO reservedConcurrentExecutions - re-add once the
                 // account's Lambda concurrency quota is raised !!
                 // Per-function reserved concurrency was tried here (5) and
@@ -476,12 +473,9 @@ public class SmallstashStack extends Stack {
                 .code(Code.fromAsset("../files-lambda/target/files-lambda-0.1.jar"))
                 .memorySize(512)
                 .timeout(Duration.seconds(30))
-                // SnapStart - same reasoning as `backend`'s copy of this
-                // comment above, applied equally here: the Files tab's own
-                // first-request-after-cold-start cost is the same Java/
-                // Micronaut init penalty, not something specific to
-                // `backend`.
-                .snapStart(SnapStartConf.ON_PUBLISHED_VERSIONS)
+                // SnapStart was tried here too, reverted the same day as
+                // `backend`'s copy of this comment - see there for the real
+                // CloudWatch numbers behind the decision.
                 // No reservedConcurrentExecutions, same reasoning and same
                 // account-wide constraint as `backend` above - see the long
                 // comment there. Two Lambdas now share the same 10-execution
@@ -809,24 +803,8 @@ public class SmallstashStack extends Stack {
                         .userPoolClients(List.of(userPoolClient))
                         .build());
 
-        // SnapStart only takes effect on a published version/alias, never
-        // $LATEST (see the .snapStart(...) comment on each Function above)
-        // - these aliases are what the API actually integrates with below,
-        // not the bare Functions. currentVersion re-publishes automatically
-        // whenever code/config changes, so every future `cdk deploy` gets
-        // its own fresh version + snapshot without any extra step here; the
-        // alias just always points at "whatever's current."
-        Alias backendAlias = Alias.Builder.create(this, "BackendAlias")
-                .aliasName("live")
-                .version(backend.getCurrentVersion())
-                .build();
-        Alias filesAlias = Alias.Builder.create(this, "FilesAlias")
-                .aliasName("live")
-                .version(filesFunction.getCurrentVersion())
-                .build();
-
-        HttpLambdaIntegration integration = new HttpLambdaIntegration("BackendIntegration", backendAlias);
-        HttpLambdaIntegration filesIntegration = new HttpLambdaIntegration("FilesIntegration", filesAlias);
+        HttpLambdaIntegration integration = new HttpLambdaIntegration("BackendIntegration", backend);
+        HttpLambdaIntegration filesIntegration = new HttpLambdaIntegration("FilesIntegration", filesFunction);
 
         HttpApi httpApi = HttpApi.Builder.create(this, "HttpApi")
                 .apiName("smallstash-api")
