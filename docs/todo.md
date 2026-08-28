@@ -891,21 +891,172 @@ silently becoming two different filter buckets, used by both functions so
 there's exactly one place that decides what a "valid tag" looks like.
 
 **UI**: `FileListItem.svelte` shows a file's tags as small pills, with an
-inline "Edit tags"/"+ Add tags" affordance (comma-separated text input,
-Save/Cancel) - genuinely editable in place, unlike everything else on a
-file row, since tags are metadata *about* the file rather than something
-baked into what was encrypted at upload time. `FilesView.svelte` gained a
-tag filter bar above the list: one toggle chip per distinct tag currently
-in use (computed live from `files`, never tracked separately), multiple
-selectable at once with **OR** semantics ("show anything tagged `taxes` OR
-`2026`", not AND) plus a "Clear filter" action. Empty-state message
-distinguishes "no files at all" from "no files match the selected tags."
+inline "Edit tags"/"+ Add tags" affordance - genuinely editable in place,
+unlike everything else on a file row, since tags are metadata *about* the
+file rather than something baked into what was encrypted at upload time.
+`FilesView.svelte` gained a tag filter bar above the list: one toggle chip
+per distinct tag currently in use (computed live from `files`, never
+tracked separately), multiple selectable at once with **OR** semantics
+("show anything tagged `taxes` OR `2026`", not AND) plus a "Clear filter"
+action. Empty-state message distinguishes "no files at all" from "no files
+match the selected tags."
+
+**Revised the same day** (user feedback: a single comma-separated field was
+the wrong shape) - one text field per tag instead of one shared field split
+on commas: `startEditTags` seeds one field per existing tag (or a single
+empty one for a file with none yet), a "+ Tag" button appends another empty
+field, and each field beyond the first gets its own small remove button
+(always leaves at least one field - clearing it and saving is how you get
+to zero tags). **Enter applies the whole edit from any field**, same as
+clicking Save - not "add another field," which stays the `+` button's job
+alone. `normalizeTags` in `session.js` needed no change: it already
+trims/dedupes/drops-empty regardless of whether the raw list came from
+splitting one string or from N separate fields.
 
 **Verified**: `npm test` **180/180** (180 - 8 new: tag normalization on
 upload including the dedupe/trim/empty-drop cases, `updateFileTags`'s happy
 path confirming one file's tags change while a second file's are untouched,
 clearing all tags, the not-found/no-session/offline rejection paths), `npm
 run build` clean.
+
+**Not yet done**: nothing in this feature has been exercised in a real
+browser, same standing gap as the rest of the Files tab.
+
+### ✅ Files-tab prefetch, 2026-08-28 - raised by the user noticing the delay
+
+Two things confirmed by reading `App.svelte` directly, not assumed:
+`FilesView` sits inside an `{#if view === 'secrets'} ... {:else} ...{/if}`,
+so it doesn't exist at all until the Files tab is clicked - that's the
+earliest its own `onMount` fetch could start. And because Svelte destroys/
+recreates the component on every tab switch, revisiting the tab re-fetches
+every time, not just the first visit. `VaultView` has no equivalent gap:
+`vaultDocument` arrives as a prop, already decrypted, by the time either
+tab exists - unlocking *is* fetching it.
+
+**Fixed without touching `VaultView`'s mount lifecycle** (kept deliberately
+untouched all session, per `FilesView.svelte`'s own header comment) or
+changing tab-switch behaviour for `FilesView` beyond the first visit -
+`App.svelte` now starts `listFiles()` immediately after every successful
+unlock path (`signInAndUnlock`, `unlockOffline`, signup), stores the
+in-flight promise, and hands it to `FilesView` as a `prefetch` prop.
+`FilesView`'s first mount uses it instead of starting its own fetch; it
+immediately tells the parent (`onprefetchconsumed`) to clear its reference,
+so every *later* tab visit falls through to a real, fresh `listFiles()`
+call - unregressed from today's behaviour, just no longer paying the first
+visit's round trip twice. A failed prefetch resolves to `null` rather than
+rejecting (`.catch(() => null)` in `App.svelte`) and `FilesView` treats
+`null` the same as "no prefetch," retrying with its own real fetch - so a
+prefetch failure never silently shows an empty list, it just falls back to
+today's error-surfacing path. Offline unlock calls the same
+`prefetchFiles()` unconditionally too, rather than special-casing it -
+`listFiles()` already throws correctly when offline, the `.catch` absorbs
+it the same way, no separate branch needed.
+
+**Verified**: `npm run build` clean, `npm test` 180/180 (unaffected -
+neither `App.svelte` nor `FilesView.svelte` has component-level test
+coverage, confirmed by checking, not assumed - same standing gap noted
+throughout the Files tab's history).
+
+**Also answered in the same conversation**: whether same-named files are a
+problem. They aren't - files are keyed by a random UUID everywhere
+internally (S3 object key, the index's own `id` field), never by name, and
+the one place a collision could matter (writing two files to a real
+filesystem during export) is already handled by `export.js`'s
+`deduplicatePaths()`. No change made; nothing needed one.
+
+### ✅ Lambda SnapStart, 2026-08-28 - eliminates the real ~6s cold start
+
+Raised by the user, who correctly rejected an EventBridge warm-up-ping
+approach on sight ("that's overhead") before I'd even proposed it in
+detail - right call, since a warmer invoking through a new route (even an
+"unauthenticated ping" one) is new public attack surface, and a warmer
+invoking the Lambda directly (bypassing the API) still means a recurring
+schedule + a code branch to no-op synthetic pings, ongoing complexity for a
+personal app. Checked SnapStart against AWS's own current docs before
+touching any code (not assumed from training data, given `JAVA_25` is a
+very recent runtime): confirmed compatible, confirmed **free for Java**
+specifically (Python/.NET carry a per-published-version caching charge;
+Java doesn't), confirmed available in eu-west-1. Also checked whether
+publishing Lambda versions itself costs anything, since versions are a
+prerequisite - no: normal Lambda billing (requests + duration) is
+unaffected; versions only consume a per-region code-storage **quota**
+(300 GB default, non-metered), and this app's two small Java jars are
+nowhere near that even after years of deploys.
+
+**The one real requirement**: SnapStart only applies to published
+versions/aliases, never `$LATEST` - confirmed via
+`docs.aws.amazon.com/lambda/latest/dg/snapstart.html`. Implemented in
+`SmallstashStack.java` for both Lambdas: `.snapStart(SnapStartConf
+.ON_PUBLISHED_VERSIONS)` on each `Function.Builder`; a `live` `Alias`
+per function pointing at `function.getCurrentVersion()` (auto-republishes
+whenever code/config changes, so every future deploy gets its own fresh
+version + snapshot with no extra step); every `HttpLambdaIntegration` now
+targets the alias instead of the bare function - this last part is what
+actually makes it take effect, since API Gateway has to invoke through the
+alias for the published-version snapshot to be used at all.
+
+**Verified structurally against the real synthesized template** (not just
+trusted from source), the same standard this stack holds cross-resource
+changes to after the earlier circular-dependency incident: both Functions'
+`SnapStart: {ApplyOn: PublishedVersions}` present; a `Version` resource
+exists for each; a `live` `Alias` exists for each, correctly
+`Fn::GetAtt`-referencing its `Version`; and - the part that actually
+matters - **every one of the 10 route permissions now targets the alias,
+not the bare function** (confirmed by listing every `AWS::Lambda::Permission`
+resource's `FunctionName` in the template). IAM policy statement counts on
+both functions' roles unchanged (2 on `backend`, 3 on `filesFunction`) -
+confirms nothing else was disturbed. `cdk synth` succeeds with only an
+expected, self-resolving advisory (`"SnapStart only supports published
+Lambda versions. Ignore if function already has published versions"` -
+exactly this app's case, via `getCurrentVersion()`).
+
+**Not yet done**: an actual `cdk deploy` to confirm this measurably closes
+the ~6 second cold-start gap live, not just that the template is correct.
+
+### ✅ Bundle download (zip), 2026-08-28 - "Download all" / "Download N files" by tag
+
+New dependency: **`fflate`** (~8 KB, zero dependencies, synchronous
+`zipSync`/`unzipSync`) - the frontend had exactly three dependencies before
+this (`amazon-cognito-identity-js`, `hash-wasm`, `idb`), deliberately lean,
+so this was flagged and confirmed with the user before adding it rather
+than done silently. Chosen over `JSZip` (the more commonly-known
+alternative) for being considerably lighter and not pulling in capabilities
+(streaming, password-protected archives) this app will never use - a
+one-shot in-memory zip of a handful of already-decrypted files is exactly
+`zipSync`'s intended shape.
+
+**New `zipFiles.js`**: `buildZipArchive(files)` takes already-decrypted
+`{name, bytes}` pairs and returns raw zip bytes, ready for `saveArtifact`.
+Reuses `export.js`'s `deduplicatePaths` (now exported, previously private)
+rather than re-solving the same-name-collision problem a second time - a
+zip archive has the exact same "two files can't share one path" constraint
+a real directory does. `bundleFileName(now)` mirrors `export.js`'s
+`csvFileName` (local date, not UTC, same reasoning).
+
+**`FilesView.svelte`**: a "Download all" button in the toolbar (the full
+`files` list); a "Download N files" button appears next to the tag filter
+chips whenever a filter is active, operating on exactly `visibleFiles` -
+the existing tag filter *is* the selection mechanism, no separate
+multi-select UI needed. Both funnel through one `handleBundleDownload`:
+downloads+decrypts every target file **sequentially, not in parallel**
+(same one-file-at-a-time shape `ExportPanel.svelte`'s buffered path already
+uses, keeping peak memory bounded to roughly one file's plaintext at a time
+during decrypt), zips the results, one `saveArtifact` call.
+
+**A real, named limit, not fixed**: this app's quota is 500 MiB/user - a
+"Download all" near that cap means holding a meaningful fraction of it in
+memory at once (decrypted bytes + zip encoding). Same class of constraint
+`crypto/files.js`'s own header comment already accepts for a single file's
+AES-GCM round trip ("peak ~2x the file size... fine at the agreed cap"),
+just extended to several files at once instead of one. Not a problem at
+this app's realistic file counts (low tens); worth knowing it doesn't scale
+past that if the quota is ever raised.
+
+**Verified**: `npm test` **185/185** (5 new - zip round-trips names and
+bytes exactly, de-duplicates same-named files while keeping each file's own
+distinct bytes rather than dropping/overwriting, handles an empty list,
+`bundleFileName`'s local-date and zero-padding behaviour), `npm run build`
+clean (bundle grew 238 KB → 249 KB, `fflate`'s footprint).
 
 **Not yet done**: nothing in this feature has been exercised in a real
 browser, same standing gap as the rest of the Files tab.

@@ -97,10 +97,16 @@ export const BOM = '﻿';
  * data with no error to explain why the export has fewer files than the
  * user uploaded.
  *
+ * Exported (not just used internally by {@link fileArtifactPaths}) because
+ * `zipFiles.js`'s bundle-download feature has the exact same
+ * same-name-collision problem writing into a zip archive that this module
+ * already solved writing into a directory - one implementation, not two
+ * copies to keep in sync.
+ *
  * @param {string[]} paths in the order artifacts will be written
  * @returns {string[]} same order, same length, all unique
  */
-function deduplicatePaths(paths) {
+export function deduplicatePaths(paths) {
   const seen = new Map();
   return paths.map((path) => {
     const count = seen.get(path) ?? 0;

@@ -40,22 +40,51 @@
   let tags = $derived(file.tags ?? []);
 
   let editingTags = $state(false);
-  let tagInput = $state('');
+  // One field per tag, not one comma-separated field - each entry here is a
+  // whole tag, edited on its own. `startEditTags` seeds one field per
+  // existing tag, or a single empty one for a file with none yet, so
+  // there's always at least one field to type into without needing an
+  // extra click first.
+  /** @type {string[]} */
+  let tagInputs = $state([]);
 
   function startEditTags() {
-    tagInput = tags.join(', ');
+    tagInputs = tags.length > 0 ? [...tags] : [''];
     editingTags = true;
+  }
+
+  function addTagField() {
+    tagInputs = [...tagInputs, ''];
+  }
+
+  /** @param {number} index */
+  function removeTagField(index) {
+    // Always leaves at least one field - clearing the last remaining one
+    // and saving is how you get down to zero tags, same as it always was;
+    // this button is for discarding an extra field you added, not the only
+    // field left.
+    if (tagInputs.length <= 1) return;
+    tagInputs = tagInputs.filter((_, i) => i !== index);
   }
 
   function cancelEditTags() {
     editingTags = false;
   }
 
+  /** Enter applies the whole edit, from any field - not "add another field"
+   * (that's what the + button is for), matching how Enter reads as "I'm
+   * done" rather than "give me more room" in a short multi-field form. */
+  function handleTagFieldKeydown(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    handleSaveTags();
+  }
+
   async function handleSaveTags() {
-    // Free-text, comma-separated - normalizeTags in session.js does the
-    // real trim/dedupe/empty-drop, so this only needs to split on the
-    // delimiter the input actually uses.
-    await onedittags(tagInput.split(',').map((t) => t.trim()).filter(Boolean));
+    // One string per field already - normalizeTags in session.js still does
+    // the real trim/dedupe/empty-drop, so a blank or duplicate field here is
+    // harmless, just quietly dropped on save.
+    await onedittags(tagInputs.map((t) => t.trim()).filter(Boolean));
     editingTags = false;
   }
 
@@ -82,17 +111,40 @@
 
   {#if editingTags}
     <div class="tag-edit">
-      <input
-        type="text"
-        bind:value={tagInput}
-        placeholder="e.g. taxes, 2026"
-        aria-label="Tags for {file.name}"
-        disabled={savingTags}
-      />
-      <button type="button" class="compact" onclick={handleSaveTags} disabled={savingTags}>
-        {savingTags ? 'Saving…' : 'Save'}
-      </button>
-      <button type="button" class="compact" onclick={cancelEditTags} disabled={savingTags}>Cancel</button>
+      <div class="tag-edit-fields">
+        {#each tagInputs as _, i}
+          <div class="tag-edit-field">
+            <input
+              type="text"
+              bind:value={tagInputs[i]}
+              placeholder="Tag"
+              aria-label="Tag {i + 1} for {file.name}"
+              disabled={savingTags}
+              onkeydown={handleTagFieldKeydown}
+            />
+            {#if tagInputs.length > 1}
+              <button
+                type="button"
+                class="tag-field-remove"
+                onclick={() => removeTagField(i)}
+                disabled={savingTags}
+                aria-label="Remove tag field {i + 1}"
+              >
+                ✕
+              </button>
+            {/if}
+          </div>
+        {/each}
+        <button type="button" class="compact tag-field-add" onclick={addTagField} disabled={savingTags}>
+          + Tag
+        </button>
+      </div>
+      <div class="tag-edit-actions">
+        <button type="button" class="compact" onclick={handleSaveTags} disabled={savingTags}>
+          {savingTags ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" class="compact" onclick={cancelEditTags} disabled={savingTags}>Cancel</button>
+      </div>
     </div>
   {:else}
     <div class="tags">
@@ -207,15 +259,51 @@
 
   .tag-edit {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: var(--ss-space-2);
     margin-top: var(--ss-space-2);
   }
 
-  .tag-edit input {
-    flex: 1 1 12rem;
-    min-width: 0;
+  .tag-edit-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-space-2);
+  }
+
+  .tag-edit-field {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  /* Narrow on purpose - each field holds one tag, not a sentence, and a
+     row of short fields reads at a glance as "several small things" the
+     way one wide field never would. */
+  .tag-edit-field input {
+    width: 8rem;
+  }
+
+  /* Same quiet treatment as .tag-edit-toggle - it sits directly against an
+     input it's about to remove and shouldn't read as heavier than that. */
+  .tag-field-remove {
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    color: var(--ss-text-faint);
+    width: var(--ss-control-height-sm);
+    height: var(--ss-control-height-sm);
+  }
+
+  .tag-field-remove:hover:not(:disabled) {
+    background: var(--ss-danger-surface);
+    border-color: var(--ss-danger-border);
+    color: var(--ss-danger-text);
+  }
+
+  .tag-edit-actions {
+    display: flex;
+    gap: var(--ss-space-2);
   }
 
   @media (max-width: 32rem) {

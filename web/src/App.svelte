@@ -14,6 +14,7 @@
     clearSession,
     onAutoLock,
     resetInactivityTimer,
+    listFiles,
   } from './lib/session.js';
 
   /** @type {'login' | 'signup' | 'forgot-password'} */
@@ -44,6 +45,30 @@
    * always lands back on Secrets rather than wherever a previous session
    * happened to leave off. */
   let view = $state('secrets');
+
+  /**
+   * Starts loading the files list the moment there's a session to load it
+   * with, rather than waiting for the user to click the Files tab -
+   * FilesView doesn't even exist yet at that point (it's behind an
+   * `{#if}`), so without this its own `onMount` fetch is the *first* thing
+   * that starts it, adding a real network round trip's worth of visible
+   * delay to a tab click that otherwise feels instant. VaultView has no
+   * equivalent gap: `vaultDocument` is already decrypted and in memory by
+   * the time either tab exists, since unlocking *is* fetching it.
+   *
+   * `.catch(() => null)`, not left to reject: a prefetch failure isn't a
+   * user-facing error on its own - FilesView's own fetch (which this seeds
+   * only for the very first mount) still runs and surfaces the real error
+   * if the user actually visits the tab. This exists purely to save the
+   * wait on the common path, not to become a second, earlier place errors
+   * can leak from.
+   * @type {Promise<import('./lib/crypto/files.js').FileMetadata[] | null> | null}
+   */
+  let filesPrefetch = $state(null);
+
+  function prefetchFiles() {
+    filesPrefetch = listFiles().catch(() => null);
+  }
 
   onMount(() => {
     const goOnline = () => {
@@ -88,6 +113,7 @@
       vaultDocument = null;
       lockedByInactivity = true;
       view = 'secrets';
+      filesPrefetch = null;
     });
 
     return () => {
@@ -117,6 +143,7 @@
     try {
       vaultDocument = await signInAndUnlock(detail.email, detail.loginPassword, detail.masterPassword);
       lastAccount = getLastAccount();
+      prefetchFiles();
     } catch (err) {
       error = err.message ?? String(err);
       if (looksLikeNetworkFailure(err) && getLastAccount()) {
@@ -135,6 +162,12 @@
     loading = true;
     try {
       vaultDocument = await unlockOffline(lastAccount.sub, detail.masterPassword);
+      // Always rejects while offline (listFiles() needs a network round
+      // trip regardless), but prefetchFiles()'s own .catch swallows that -
+      // harmless to call unconditionally rather than special-casing this
+      // path, and it's what's already in place the moment connectivity
+      // returns without needing a second trigger for that.
+      prefetchFiles();
     } catch (err) {
       error = err.message ?? String(err);
     } finally {
@@ -148,6 +181,10 @@
     vaultDocument = detail.vaultDocument;
     lastAccount = getLastAccount();
     authMode = 'login';
+    // A brand-new account has no files-index yet, so this resolves to []
+    // almost immediately - still correct and consistent to prefetch it the
+    // same way as every other unlock path, not a special case.
+    prefetchFiles();
   }
 
   function handleSignOut() {
@@ -162,6 +199,7 @@
     error = '';
     notice = '';
     view = 'secrets';
+    filesPrefetch = null;
   }
 
   /** @param {'login' | 'signup' | 'forgot-password'} mode */
@@ -238,7 +276,11 @@
     {#if view === 'secrets'}
       <VaultView bind:vaultDocument onsignout={handleSignOut} />
     {:else}
-      <FilesView onsignout={handleSignOut} />
+      <FilesView
+        onsignout={handleSignOut}
+        prefetch={filesPrefetch}
+        onprefetchconsumed={() => (filesPrefetch = null)}
+      />
     {/if}
   {:else}
     <!-- Every pre-unlock view shares one elevated card. Signed-in vault
