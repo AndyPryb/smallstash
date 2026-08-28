@@ -964,7 +964,7 @@ the one place a collision could matter (writing two files to a real
 filesystem during export) is already handled by `export.js`'s
 `deduplicatePaths()`. No change made; nothing needed one.
 
-### ✅ Lambda SnapStart, 2026-08-28 - eliminates the real ~6s cold start
+### ⚠️➡️✅ Lambda SnapStart, tried and reverted 2026-08-28 - real numbers said no
 
 Raised by the user, who correctly rejected an EventBridge warm-up-ping
 approach on sight ("that's overhead") before I'd even proposed it in
@@ -1010,8 +1010,56 @@ expected, self-resolving advisory (`"SnapStart only supports published
 Lambda versions. Ignore if function already has published versions"` -
 exactly this app's case, via `getCurrentVersion()`).
 
-**Not yet done**: an actual `cdk deploy` to confirm this measurably closes
-the ~6 second cold-start gap live, not just that the template is correct.
+**Deployed, measured live, then reverted the same day.** The user deployed
+it and reported it "still pretty same slow" - rather than trust that
+impression alone, pulled real `REPORT`/`RESTORE_REPORT` lines from
+CloudWatch for `smallstash-backend` in the 35 minutes after the deploy:
+
+```
+RESTORE_REPORT  Restore Duration: 1126.66 ms         <- fast, SnapStart genuinely working
+REPORT          Duration: 10457.08 ms  Restore Duration: 1126.66 ms  <- but the real request: still slow
+REPORT          Duration: 1242.67 ms                 <- next request, same warm env: fast
+```
+
+Restore itself really was fast (~1.1s, down from the ~6s `Init Duration`
+it replaced) - that part worked exactly as documented. But the *first real
+request* against a freshly-restored environment still cost ~10.5s of
+**handler**-level latency, not init. Comparing full totals: the old cold
+start was Init (5,958 ms) + handler (4,349 ms) ≈ **10.3s**; the new one was
+Restore (1,127 ms) + handler (10,457 ms) ≈ **11.6s** - roughly the same,
+arguably worse in this sample, not better.
+
+Root cause, confirmed against external sources before concluding (not
+guessed): this is a well-documented SnapStart-for-Java characteristic -
+the snapshot preserves loaded classes and object state, but **not
+JIT-compiled code**. A framework-heavy app like this one (Micronaut's
+routing/security layers) still has to JIT-compile its hot paths from
+scratch on the first real request after every restore. AWS's own fix is
+**"priming"** - deliberately exercising representative request paths inside
+a `beforeCheckpoint` hook (via the `org.crac.Resource` interface) so the
+JIT-compiled code gets baked into the snapshot itself, and every restore
+starts pre-warmed. Real, nontrivial extra engineering (the hooks
+themselves, picking genuinely representative code paths, verifying nothing
+latent leaks into a snapshot shared across execution environments) -
+disproportionate to what a personal app with "a handful of requests every
+few days" actually needs, especially since that traffic pattern means most
+real requests hit a cold-or-freshly-restored environment regardless of
+SnapStart.
+
+**Reverted the same day**: removed `.snapStart(...)` from both
+`Function.Builder`s, removed both `Alias`/`Version` constructs, both
+`HttpLambdaIntegration`s point at the bare `Function`s again, unused
+`Alias`/`SnapStartConf` imports removed. Verified structurally against the
+synthesized template, the same standard used when this was added: no
+`AWS::Lambda::Version`/`AWS::Lambda::Alias` resources remain, `SnapStart:
+None` on both functions, every route permission targets the bare function
+ARN again. `cdk synth` clean, no warnings this time (the earlier
+self-resolving SnapStart advisory is gone, as expected).
+
+Worth reconsidering only if proper priming ever gets built - not otherwise.
+Not deployed yet (needs the standard explicit confirmation, as always) -
+the live stack currently still has the SnapStart config from the earlier
+deploy until this revert ships.
 
 ### ✅ Bundle download (zip), 2026-08-28 - "Download all" / "Download N files" by tag
 
