@@ -23,13 +23,20 @@
   import { onMount } from 'svelte';
   import { listFiles, uploadFile, downloadFile, removeFile, updateFileTags } from '../session.js';
   import { saveArtifact } from '../saveFile.js';
+  import { buildZipArchive, bundleFileName } from '../zipFiles.js';
   import { MAX_FILE_SIZE_BYTES } from '../crypto/files.js';
   import { formatFileSize } from '../formatFileSize.js';
   import FileListItem from './FileListItem.svelte';
   import Alert from './Alert.svelte';
 
-  /** @type {{ onsignout: () => void }} */
-  let { onsignout } = $props();
+  /**
+   * @type {{
+   *   onsignout: () => void,
+   *   prefetch?: Promise<import('../crypto/files.js').FileMetadata[] | null> | null,
+   *   onprefetchconsumed?: () => void,
+   * }}
+   */
+  let { onsignout, prefetch = null, onprefetchconsumed } = $props();
 
   /** @type {import('../crypto/files.js').FileMetadata[]} */
   let files = $state([]);
@@ -45,6 +52,11 @@
   /** Same one-at-a-time reasoning as downloadingId, for the tag-edit save. */
   let savingTagsId = $state(null);
   let actionError = $state('');
+
+  // "Download all" / "Download N files" - single-flight, not per-file, so a
+  // second click while one bundle is still being built can't overlap it.
+  let bundling = $state(false);
+  let bundleError = $state('');
 
   /** @type {HTMLInputElement | undefined} */
   let fileInput;
@@ -76,14 +88,32 @@
   );
 
   onMount(async () => {
-    await refresh();
+    // App.svelte starts fetching the files list right after unlock, well
+    // before either tab exists to click - see its own comment for why. Only
+    // this component's *first* mount can use that head start: it's a single
+    // promise, already in flight or already settled by the time it's handed
+    // down, not something that can serve a second, later visit with fresh
+    // data. Telling the parent it's been consumed (before awaiting it, so a
+    // slow prefetch doesn't delay the parent from clearing its own
+    // reference) is what makes every later tab switch fall through to a
+    // real, fresh listFiles() call below - exactly today's behaviour,
+    // unregressed.
+    const usedPrefetch = prefetch;
+    onprefetchconsumed?.();
+    await refresh(usedPrefetch);
   });
 
-  async function refresh() {
+  /** @param {Promise<import('../crypto/files.js').FileMetadata[] | null> | null} [prefetchPromise] */
+  async function refresh(prefetchPromise = null) {
     loading = true;
     loadError = '';
     try {
-      files = await listFiles();
+      // A prefetch that failed resolves to null (App.svelte swallows its
+      // own error deliberately - see there), not rejects, so `?? []` alone
+      // wouldn't be enough here: null still needs to fall through to a real
+      // fetch, which is what surfaces the *actual* error to the user rather
+      // than silently showing an empty list.
+      files = prefetchPromise ? (await prefetchPromise) ?? (await listFiles()) : await listFiles();
     } catch (err) {
       loadError = err.message ?? String(err);
     } finally {
@@ -151,6 +181,36 @@
     }
   }
 
+  /**
+   * Bundles multiple files into one zip and saves it in a single prompt -
+   * "Download all" (the toolbar button, always the full `files` list) and
+   * "Download N files" (next to the tag filter, `visibleFiles` - whatever
+   * the filter is currently narrowed to) both funnel through here.
+   * Sequential downloads, not parallel: peak memory stays bounded to
+   * roughly one file's plaintext at a time during decrypt, the same
+   * one-file-at-a-time shape ExportPanel.svelte's buffered path already
+   * uses for the equivalent problem.
+   *
+   * @param {import('../crypto/files.js').FileMetadata[]} targetFiles
+   */
+  async function handleBundleDownload(targetFiles) {
+    if (targetFiles.length === 0) return;
+    bundleError = '';
+    bundling = true;
+    try {
+      const downloaded = [];
+      for (const file of targetFiles) {
+        downloaded.push(await downloadFile(file.id));
+      }
+      const zipBytes = buildZipArchive(downloaded);
+      await saveArtifact({ path: bundleFileName(), contents: zipBytes, mimeType: 'application/zip' });
+    } catch (err) {
+      bundleError = err.message ?? String(err);
+    } finally {
+      bundling = false;
+    }
+  }
+
   /** @param {string} fileId @param {string[]} tags */
   async function handleEditTags(fileId, tags) {
     actionError = '';
@@ -187,6 +247,14 @@
         onchange={handleFileSelected}
         aria-label="Choose a file to upload"
       />
+      <button
+        type="button"
+        class="compact"
+        onclick={() => handleBundleDownload(files)}
+        disabled={bundling || files.length === 0}
+      >
+        {bundling ? 'Preparing…' : 'Download all'}
+      </button>
     </div>
     <div class="toolbar-actions">
       <button type="button" class="compact danger" onclick={handleSignOut}>Sign out</button>
@@ -211,6 +279,10 @@
     <Alert variant="error" ondismiss={() => (actionError = '')}>{actionError}</Alert>
   {/if}
 
+  {#if bundleError}
+    <Alert variant="error" ondismiss={() => (bundleError = '')}>{bundleError}</Alert>
+  {/if}
+
   {#if loading}
     <p class="hint">Loading your files…</p>
   {:else}
@@ -228,6 +300,14 @@
           </button>
         {/each}
         {#if selectedTags.size > 0}
+          <button
+            type="button"
+            class="compact"
+            onclick={() => handleBundleDownload(visibleFiles)}
+            disabled={bundling || visibleFiles.length === 0}
+          >
+            {bundling ? 'Preparing…' : `Download ${visibleFiles.length} ${visibleFiles.length === 1 ? 'file' : 'files'}`}
+          </button>
           <button type="button" class="compact" onclick={() => (selectedTags = new Set())}>Clear filter</button>
         {/if}
       </div>
