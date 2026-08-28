@@ -3,8 +3,18 @@
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <!-- encoders are assigned the type
              ch.qos.logback.classic.encoder.PatternLayoutEncoder by default -->
+        <!--
+          Kept identical to files-lambda's copy of this file, deliberately -
+          see that copy's comment for the full reasoning (found while
+          investigating a real incident in files-lambda,
+          docs/file-storage-plan.md, 2026-08-27/28, but the same
+          CloudWatch-vs-terminal mismatch applies equally here): no ANSI
+          colour codes (meaningless in CloudWatch), and %replace(%xEx){...}
+          squashes an exception's stack trace onto one line instead of
+          fragmenting it into one CloudWatch log event per frame.
+        -->
         <encoder>
-            <pattern>%cyan(%d{HH:mm:ss.SSS}) %gray([%thread]) %highlight(%-5level) %magenta(%logger{36}) - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%replace(%xEx){'[\r\n]+\t*', ' | '}%n</pattern>
         </encoder>
     </appender>
 

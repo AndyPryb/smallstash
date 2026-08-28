@@ -3,8 +3,38 @@
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <!-- encoders are assigned the type
              ch.qos.logback.classic.encoder.PatternLayoutEncoder by default -->
+        <!--
+          Two changes from the original pattern, both aimed at how this
+          actually reads once it's in CloudWatch Logs rather than a local
+          terminal (found while investigating a real incident,
+          docs/file-storage-plan.md, 2026-08-27/28):
+
+          1. No ANSI colour codes (%cyan/%gray/%highlight/%magenta). CloudWatch
+             doesn't render them - they show up as raw, meaningless escape
+             bytes in every single line, which is exactly the kind of thing
+             that looks like "spam" without being useful anywhere this app's
+             logs actually get read. Plain-text local console output reads
+             fine without them.
+
+          2. %replace(%xEx){...} squashes an exception's stack trace onto the
+             SAME line as its message, in place of the default behaviour
+             (append the full multi-line trace after %msg%n). This is the
+             fix that actually matters: CloudWatch's log capture treats every
+             literal newline in stdout as a separate log event, so an
+             unsquashed Java stack trace - easily 15-20 frames - shows up as
+             15-20 disconnected, out-of-order-looking CloudWatch entries for
+             one single exception. Squashing to " | "-joined single line
+             turns that into exactly one event, still fully greppable
+             (message and every frame are still literal substrings), and
+             still fully readable, just as one coherent record instead of a
+             wall of fragments. Referencing %xEx explicitly here already
+             suppresses PatternLayout's own automatic exception-append
+             (its documented behaviour once any %ex/%xEx/%throwable
+             conversion appears in the pattern), so there's no separate
+             %nopex needed and no risk of the trace appearing twice.
+        -->
         <encoder>
-            <pattern>%cyan(%d{HH:mm:ss.SSS}) %gray([%thread]) %highlight(%-5level) %magenta(%logger{36}) - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%replace(%xEx){'[\r\n]+\t*', ' | '}%n</pattern>
         </encoder>
     </appender>
 

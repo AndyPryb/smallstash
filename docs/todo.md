@@ -760,6 +760,108 @@ found none. Full record in
 Not done: an actual `cdk deploy` to confirm this resolves the real
 changeset error, not just the template graph.
 
+### ✅ Live `s3:ListBucket AccessDeniedException` on `FilesFunction`, root-caused and fixed (2026-08-27/28)
+
+The circular-dependency fix above deployed successfully, but the very first
+live use of `FilesFunction` failed with `s3:ListBucket AccessDeniedException`,
+reproduced multiple times.
+
+**Extensive elimination, with the user's help granting `smallstash-deployer`
+temporary read-only IAM diagnostics** (reverted after use) ruled out: policy
+drift (`cloudformation get-template` byte-identical to the Console view),
+the `s3:prefix` condition itself (`iam:simulate-principal-policy` with the
+real-shaped value returned `allowed`), a permissions boundary, hidden/extra
+policies, Service Control Policies (account isn't in an Organization at
+all), and `FilesBucket`'s own bucket policy (no `Deny`, doesn't even
+reference this role).
+
+**Everything IAM-observable said this should work; it didn't, live.** A
+temporary diagnostic log line in `FilesUsageService.currentUsageBytes()`
+(since removed - see below) plus **CloudWatch Logs Insights queries
+correlating exact request windows across both the Lambda's own log group
+and the API Gateway access log** found the real explanation, and it wasn't
+intermittent at all - it was 100% deterministic, just not on the code path
+this whole investigation had been assuming:
+
+**The failing requests were all `GET /files-index`, never an upload.**
+`mint`/`commit` (which call `FilesUsageService.currentUsageBytes()`, the
+only code path this investigation had considered) succeeded every time.
+`FilesIndexController.get()` doesn't call `currentUsageBytes()` at all - it
+only calls `s3:GetObject`, which *is* granted - but hit a well-documented,
+deliberate S3 behavior: **`GetObject` on a key that doesn't exist, without
+`s3:ListBucket` covering it, returns `403 AccessDenied` (blaming
+`ListBucket`) instead of a clean `404`**, specifically so an unauthorized
+caller can't use the 403-vs-404 distinction to probe whether a key exists.
+The test account had never uploaded a file, so `files-index.json.enc`
+genuinely didn't exist - and the `ListBucket` grant's `s3:prefix` condition
+was scoped to `users/*/files/*` (the `files/` subfolder, for the
+quota-listing use case) while the index blob lives one level up, directly
+under `users/<sub>/` - outside that condition entirely. Every brand-new
+user opening the Files tab for the first time would have hit this.
+
+**Fix**: widened the `ListBucket` condition from `users/*/files/*` to
+`users/*` in `SmallstashStack.java`, matching the scope `GetObject`/
+`PutObject` already cover - not a loosening, since this role already has
+`GetObject`/`PutObject` across that same `users/*` tree; it just lets S3
+answer "doesn't exist" honestly across the same keyspace those actions
+already reach. The temporary diagnostic log line was removed once the real
+root cause was found (it wasn't the path that actually mattered here, but
+ruling it out was real progress, not wasted effort - it's what forced
+looking at *which endpoint* was actually failing instead of *which prefix
+value* was being sent). **Verified**: `./mvnw test` 20/20, local `cdk synth`
+confirms the widened condition in the synthesized template. **Not yet
+deployed** - needs explicit confirmation, as always.
+
+**Lesson for future incidents like this**: correlating logs by AWS Lambda's
+own `@requestId` field in CloudWatch Logs Insights doesn't work for this
+app's application-level log lines (confirmed directly - it's populated for
+the platform's own `START`/`END`/`REPORT` sentinel lines, but consistently
+`MISSING` for anything Micronaut/Logback prints, including both the ERROR
+and the temporary INFO diagnostic line). Timestamp-window correlation
+against the `START`/`END` boundaries *does* work reliably and is what
+actually solved this - worth reaching for that method first next time,
+rather than filtering by `@requestId` on non-platform log lines.
+
+**Temporary IAM diagnostic policy on `smallstash-deployer`**: added
+`iam:SimulatePrincipalPolicy` + read-only role-inspection actions, scoped to
+just this one role's ARN, alongside a fix for a pre-existing
+`iam:PassRole`-with-wildcard-resource warning (Access Analyzer recommended
+`iam:PassedToService` condition instead of narrower ARNs, which aren't
+practical here since CloudFormation-generated role names are unknown ahead
+of time). **Should be reverted back to the PassRole-fixed-only version now**
+- the investigation is closed, nothing further needed from those diagnostics.
+
+### ✅ Logging cleanup, 2026-08-27/28 - found while investigating the above
+
+**Real, permanent fix, not incident-specific**: both Lambdas' `logback.xml`
+used a color-coded console pattern (`%cyan`/`%highlight`/etc.) meant for a
+local terminal, and let exceptions print with logback's default
+one-stack-frame-per-line behaviour. Neither is right for CloudWatch: ANSI
+codes render as raw meaningless escape bytes there, and - the real
+problem - CloudWatch's log capture splits on every literal newline in
+stdout, so a single exception with a 15-20 frame stack trace showed up as
+15-20 disconnected, confusing CloudWatch log events instead of one
+coherent record (see the raw log dump the user pasted for `21:29:43.880Z`
+- that whole wall of `at ...` lines was **one exception**). Fixed in both
+`vault-lambda`'s and `files-lambda`'s `logback.xml` identically: dropped
+the colour codes, and added `%replace(%xEx){'[\r\n]+\t*', ' | '}` to squash
+a stack trace onto the same line as its message, `|`-joined - one
+CloudWatch event per log call now, still fully greppable (message and every
+frame remain literal substrings). Verified: `./mvnw test` still 20/20,
+clean single-line output confirmed directly in the test run's own console
+capture.
+
+**Separately raised by the user**: whether it's time to add actual
+application-level logging at critical points, given this investigation
+surfaced that **neither Lambda has ever had a single application log
+statement** - everything before this was Micronaut/AWS SDK framework
+default output only. Genuinely a real gap, but deliberately **not** done as
+part of this incident - "what's worth logging, at what level, with which
+fields safe to include" (e.g. `userSub` is fine per architecture.md §5,
+ciphertext/tokens never are) is a real design decision worth a dedicated
+pass, not something to bolt on reactively mid-incident. Tracked as its own
+item below.
+
 ### ✅ Phase 2 done 2026-08-27 - client crypto + upload/download plumbing
 
 Same branch, still uncommitted. ⚠️ **Found and fixed a real Phase 1 gap
@@ -2538,6 +2640,20 @@ fields don't do anything yet:
 - [ ] **Cognito Advanced Security Features** (paid add-on: compromised-credential
       checks, adaptive auth) - skip for now, personal-scale traffic doesn't
       justify it.
+- [ ] **Application-level logging at critical points, both Lambdas**
+      (raised 2026-08-27/28, while investigating the live `s3:ListBucket`
+      AccessDenied incident above). Neither Lambda has ever had a single
+      application log statement - everything so far is Micronaut/AWS SDK
+      framework default output, plus the one temporary diagnostic line added
+      for that incident (meant to be removed once it's resolved, not kept).
+      Worth doing deliberately, not reactively: needs a real decision on
+      what's worth logging (request received/completed with outcome? every
+      S3 call? just error paths?), at what level, and which fields are safe
+      to include (`userSub` is fine - architecture.md §5 already treats it
+      as non-secret - but nothing ciphertext/token-shaped ever should be).
+      The logging *pipeline* itself (`logback.xml` in both modules) was
+      already fixed the same day - see the entry above - so whatever gets
+      added here will actually read cleanly in CloudWatch from day one.
 
 ## API testing approach — Postman tried and abandoned, JS automated tests next (2026-08-23)
 
