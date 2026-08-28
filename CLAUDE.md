@@ -105,15 +105,24 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 ## Current status (check `git log` / `docs/architecture.md` §9 for the live version)
 
 - Backend (`vault`/`keys`/`config` in `vault-lambda`, `security`/`error` in
-  `common`): written, compiles clean. **LocalStack integration tests do run
-  here** - `./mvnw test` reaches the real Docker engine and passes
-  (`Tests run: 5, Failures: 0, Errors: 0, Skipped: 0` as of 2026-08-27). An
-  earlier version of this line said Docker was unavailable in this sandbox;
-  that was a false negative from the bare `docker` CLI not being on this
-  shell's `PATH`, not from the engine actually being unreachable - checked
-  via `./mvnw test` directly, not assumed from a `docker info` probe. Use
-  the wrapper, not a `docker`/`docker info` check, to tell whether tests can
-  run here.
+  `common`): written, compiles clean. **Docker/LocalStack is NOT reachable
+  from this sandbox, confirmed 2026-08-29** - correcting a wrong claim this
+  file made as recently as 2026-08-27 ("`./mvnw test` reaches the real
+  Docker engine"). That claim was itself a false positive: `./mvnw test`
+  passing was never proof LocalStack was used, because when Micronaut Test
+  Resources' LocalStack redirect fails, the AWS SDK silently falls back to
+  real AWS with real ambient credentials - and the *same* test assertions
+  pass either way, since the CRUD operations behave identically against
+  real S3/DynamoDB. Confirmed directly, not inferred: live SDK request
+  logging showed 100% of test requests hitting the real
+  `*.amazonaws.com` endpoint across repeated runs, and `docker`/`where
+  docker` find nothing on this shell's `PATH` in either direction. A
+  `LocalStackGuard` (test-scope only, both modules) now fails every
+  LocalStack-backed test loudly at startup if no LocalStack endpoint
+  override is present, rather than silently proceeding against real AWS -
+  so **these tests currently fail here**, correctly, until Docker becomes
+  reachable in whatever environment runs them. See docs/todo.md's
+  2026-08-29 entry for the full investigation.
 - Infra (`infra/`): **deployed and live** (2026-08-25, in-place update to
   the same stack — `SmallstashStack` ARN, pool ID `eu-west-1_<pool-id>`,
   API URL, and bucket names all unchanged from the "Live stack outputs" in
@@ -228,13 +237,20 @@ CDK_OUTDIR=cdk.out ../mvnw compile exec:java   # `cdk synth` without the CLI
 
 ## Working agreements (learned this session, keep applying them)
 
-- **"Is Docker available" means running `./mvnw test` (or `mvn test`), not
-  `docker`/`docker info`.** The bare `docker` CLI isn't on this shell's
-  `PATH`, so a `docker info` probe fails even when the engine is reachable
-  and Micronaut's test-resources service connects to it fine - this false
-  negative got asserted as fact across three file-storage-plan.md phase
-  write-ups before being caught (2026-08-27) and corrected in each. Always
-  check with the actual Maven command, not a Docker CLI proxy for it.
+- **Neither `docker info` nor `./mvnw test` passing proves Docker/LocalStack
+  is reachable - a claim this file itself got wrong twice.** First
+  (2026-08-27): asserted `docker info` failing meant Docker was unavailable,
+  when the real issue was just the bare `docker` CLI missing from this
+  shell's `PATH`. That got "corrected" to "`./mvnw test` passing proves it
+  works" - which turned out to be wrong too (2026-08-29): when Micronaut
+  Test Resources' LocalStack redirect silently fails, the AWS SDK falls
+  back to real AWS, and the same tests still pass against real
+  S3/DynamoDB with real ambient credentials - a false positive, not proof
+  of anything. The only reliable check now: a `LocalStackGuard` in both
+  backend modules' test sources fails the build loudly if a client bean
+  has no LocalStack endpoint override. If `mvn test` fails with that exact
+  message, Docker/LocalStack genuinely isn't reachable - trust that
+  failure, don't explain it away.
 - **Security claims especially need verifying, not asserting.** Several
   plausible-sounding "facts" turned out to be wrong when checked during the
   2026-08-24 review: AWS WAF can't attach to an API Gateway HTTP API (v2)

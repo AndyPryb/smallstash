@@ -268,6 +268,15 @@ public class SmallstashStack extends Stack {
                 .memorySize(128)
                 .timeout(Duration.seconds(5))
                 .environment(Map.of("INVITE_CODE", inviteCode))
+                // Without this, Lambda creates its own default log group
+                // that CloudFormation doesn't track - confirmed orphaned
+                // after a real `cdk destroy` (2026-08-28), same reasoning
+                // as backend/filesFunction's own LogGroup below.
+                .logGroup(LogGroup.Builder.create(this, "PreSignUpFunctionLogGroup")
+                        .logGroupName("/aws/lambda/smallstash-presignup")
+                        .retention(RetentionDays.ONE_MONTH)
+                        .removalPolicy(RemovalPolicy.DESTROY)
+                        .build())
                 .build();
 
         // selfSignUpEnabled stays true - the PreSignUp trigger above is what
