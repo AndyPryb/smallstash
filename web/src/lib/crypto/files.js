@@ -101,6 +101,11 @@ export async function decryptFile(fileKey, ciphertextBytes) {
  * @property {number} sizeBytes ciphertext size (what commit's response returned)
  * @property {string} wrappedFileKey base64, this file's DEK wrapped by the Vault Key
  * @property {string} createdAt ISO 8601
+ * @property {string[]} [tags] user-assigned labels, free text (docs/todo.md
+ *   "Option B" tagging feature) - optional because every file uploaded
+ *   before this feature exists has no such field at all, not even `[]`;
+ *   every reader treats a missing `tags` the same as an empty array rather
+ *   than requiring a migration of existing index entries.
  */
 
 /**

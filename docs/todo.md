@@ -831,6 +831,85 @@ practical here since CloudFormation-generated role names are unknown ahead
 of time). **Should be reverted back to the PassRole-fixed-only version now**
 - the investigation is closed, nothing further needed from those diagnostics.
 
+### ⚠️ Discovered while investigating the above: `./mvnw test` has been silently hitting real AWS, not LocalStack (accepted for now, 2026-08-28)
+
+Confirmed directly, not assumed: the real account has two buckets
+(`smallstash-files`, `smallstash-vaults`) and the real production
+`smallstash-users` DynamoDB table contains ~18 fake `user-<nanotime>`-shaped
+items alongside the 6 real users' `KEYS`/`PROFILE` pairs. None of those are
+CDK-managed (CDK's real bucket names are auto-generated,
+`smallstashstack-filesbucket...`; the literal names here are each module's
+own `application.properties` default). Micronaut Test Resources is supposed
+to transparently redirect `S3Client`/`DynamoDbClient` to an isolated local
+LocalStack container during `./mvnw test`, with no code change needed -
+that injection has been unreliable in this environment, and its failure
+mode is silent: when it doesn't apply, the AWS SDK's default credential
+chain falls through to real AWS using the ambient `smallstash-deployer`
+credentials, with each property's literal default name (since no env var
+substitutes it). **Checked carefully - no real user's data was touched**:
+every fake item's PK is `user-<nanotime>`-shaped, never a UUID, so nothing
+collided with a real Cognito sub.
+
+**Deliberately not fixed right now** - the user's call, not an oversight:
+comfortable using real AWS during this development phase, plans a full
+`cdk destroy`/`cdk deploy` cycle plus a rotated invite code once the feature
+set is polished, which clears all of this (and the manually-cleaned
+orphaned file objects from the earlier incident) for free. If that plan
+changes before then, the actual fix is giving test runs their own
+obviously-test-only bucket/table names (`application-test.properties`) that
+don't collide with any real default - makes a future LocalStack-injection
+failure fail loud (`NoSuchBucket`/`ResourceNotFoundException`) instead of
+silently mutating production.
+
+### ✅ File tagging done 2026-08-28 - "Option B" from three grouping options discussed
+
+The single/nested-folder "explorer" idea was deliberately rejected as
+overkill for the file counts this app will ever hold (low tens, bounded by
+the 500 MiB quota - see FilesController's own reasoning for the same
+"doesn't need to scale further" judgment). Three options were discussed:
+(A) a single flat folder-like label per file, (B) free-form multi-value
+tags, (C) no new taxonomy at all, just date-grouping plus filename search.
+User picked B.
+
+**Data model**: `FileMetadata` (crypto/files.js) gained an optional
+`tags?: string[]` field - optional, not defaulted to `[]`, specifically so
+every file uploaded before this feature needs no migration; every reader
+treats a missing `tags` the same as an empty array (`file.tags ?? []`)
+rather than assuming the field exists. No backend/infra change of any kind:
+the files index is opaque client-side-encrypted JSON the backend never
+inspects (only the 64 KiB ciphertext cap applies), so a new field is free.
+
+**`session.js`**: `uploadFile` gained an optional `tags` parameter (tags can
+be set at upload time, but don't have to be - equally addable later); a new
+`updateFileTags(fileId, tags)` does the same read-decrypt-mutate-encrypt-PUT
+round trip `removeFile` already established as this module's pattern for
+index mutations, including the same non-transactional caveat (two
+independent requests, no transaction across them) `removeFile`'s own doc
+comment already flags. A shared, unexported `normalizeTags()` (trim, drop
+empties, de-duplicate) keeps a tag typed as `"Taxes"` and `"Taxes "` from
+silently becoming two different filter buckets, used by both functions so
+there's exactly one place that decides what a "valid tag" looks like.
+
+**UI**: `FileListItem.svelte` shows a file's tags as small pills, with an
+inline "Edit tags"/"+ Add tags" affordance (comma-separated text input,
+Save/Cancel) - genuinely editable in place, unlike everything else on a
+file row, since tags are metadata *about* the file rather than something
+baked into what was encrypted at upload time. `FilesView.svelte` gained a
+tag filter bar above the list: one toggle chip per distinct tag currently
+in use (computed live from `files`, never tracked separately), multiple
+selectable at once with **OR** semantics ("show anything tagged `taxes` OR
+`2026`", not AND) plus a "Clear filter" action. Empty-state message
+distinguishes "no files at all" from "no files match the selected tags."
+
+**Verified**: `npm test` **180/180** (180 - 8 new: tag normalization on
+upload including the dedupe/trim/empty-drop cases, `updateFileTags`'s happy
+path confirming one file's tags change while a second file's are untouched,
+clearing all tags, the not-found/no-session/offline rejection paths), `npm
+run build` clean.
+
+**Not yet done**: nothing in this feature has been exercised in a real
+browser, same standing gap as the rest of the Files tab.
+
 ### ✅ Logging cleanup, 2026-08-27/28 - found while investigating the above
 
 **Real, permanent fix, not incident-specific**: both Lambdas' `logback.xml`

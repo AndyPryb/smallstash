@@ -332,6 +332,28 @@ export async function listFiles() {
 }
 
 /**
+ * Trims, drops empties, and de-duplicates (case-sensitive) a raw tag list -
+ * shared by `uploadFile` and `updateFileTags` so a tag typed as `"Taxes"`
+ * and `"Taxes "` (or typed twice) don't silently become separate filter
+ * buckets in the UI. Deliberately not exported: nothing outside this module
+ * writes tags without going through one of those two functions.
+ *
+ * @param {string[]} tags
+ * @returns {string[]}
+ */
+function normalizeTags(tags) {
+  const seen = new Set();
+  const result = [];
+  for (const raw of tags ?? []) {
+    const tag = raw.trim();
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    result.push(tag);
+  }
+  return result;
+}
+
+/**
  * Encrypts and uploads a new file, then adds it to the index. Requires an
  * online session throughout - unlike `saveVault`, there is no local-first
  * step to fall back to, since the upload itself needs the network.
@@ -339,9 +361,12 @@ export async function listFiles() {
  * @param {{ name: string, type: string, arrayBuffer: () => Promise<ArrayBuffer> }} file
  *   a browser `File`/`Blob` - only this shape is used, so a test double
  *   doesn't need to be a real `File`
+ * @param {string[]} [tags] optional labels to attach at upload time -
+ *   equally addable/editable later via `updateFileTags`, so this is a
+ *   convenience, not the only way to tag a file
  * @returns {Promise<import('./crypto/files.js').FileMetadata>} the new entry
  */
-export async function uploadFile(file) {
+export async function uploadFile(file, tags = []) {
   if (!active) throw new Error('No active session');
   if (!active.idToken) throw new Error('Cannot upload files while offline - reconnect and sign in again');
 
@@ -367,6 +392,7 @@ export async function uploadFile(file) {
       sizeBytes,
       wrappedFileKey: await wrapFileKey(active.vaultKey, fileKey),
       createdAt: new Date().toISOString(),
+      tags: normalizeTags(tags),
     };
 
     const index = await getFilesIndex(active.idToken);
@@ -381,6 +407,35 @@ export async function uploadFile(file) {
     wipe(plaintext);
     if (ciphertext) wipe(ciphertext);
   }
+}
+
+/**
+ * Replaces a file's tag set. Same read-modify-write shape as `removeFile`'s
+ * index update below (one GET, decrypt, mutate the one entry in memory,
+ * encrypt, PUT) - the same non-transactional caveat noted on `removeFile`
+ * applies equally here, for the same reason (two independent requests, no
+ * transaction across them).
+ *
+ * @param {string} fileId
+ * @param {string[]} tags replaces the existing set entirely, not a merge -
+ *   the caller (the tag-edit UI) always has the full intended set already,
+ *   since it starts from the file's current tags
+ * @returns {Promise<import('./crypto/files.js').FileMetadata>} the updated entry
+ */
+export async function updateFileTags(fileId, tags) {
+  if (!active) throw new Error('No active session');
+  if (!active.idToken) throw new Error('Cannot update tags while offline - reconnect and sign in again');
+
+  const index = await getFilesIndex(active.idToken);
+  if (!index) throw new Error('No files found');
+  const document = await decryptFilesIndex(active.vaultKey, index.ciphertextBase64);
+  const entry = document.files.find((f) => f.id === fileId);
+  if (!entry) throw new Error('That file was not found in your files list');
+
+  entry.tags = normalizeTags(tags);
+  const updatedCiphertextBase64 = await encryptFilesIndex(active.vaultKey, document);
+  await putFilesIndex(active.idToken, updatedCiphertextBase64);
+  return entry;
 }
 
 /**
