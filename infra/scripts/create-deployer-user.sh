@@ -35,7 +35,6 @@ cat > "$POLICY_FILE" <<'EOF'
         "iam:CreateRole",
         "iam:DeleteRole",
         "iam:GetRole",
-        "iam:PassRole",
         "iam:TagRole",
         "iam:UntagRole",
         "iam:UpdateRole",
@@ -66,6 +65,23 @@ cat > "$POLICY_FILE" <<'EOF'
         "arn:aws:iam::*:policy/cdk-*",
         "arn:aws:iam::*:instance-profile/cdk-*"
       ]
+    },
+    {
+      "Sid": "ScopedPassRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::*:role/smallstash-*",
+        "arn:aws:iam::*:role/cdk-*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "cloudformation.amazonaws.com"
+          ]
+        }
+      }
     }
   ]
 }

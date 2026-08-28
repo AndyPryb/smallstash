@@ -831,7 +831,7 @@ practical here since CloudFormation-generated role names are unknown ahead
 of time). **Should be reverted back to the PassRole-fixed-only version now**
 - the investigation is closed, nothing further needed from those diagnostics.
 
-### ⚠️ Discovered while investigating the above: `./mvnw test` has been silently hitting real AWS, not LocalStack (accepted for now, 2026-08-28)
+### ✅ `./mvnw test` was silently hitting real AWS, not LocalStack - root-caused and fixed (2026-08-28/29)
 
 Confirmed directly, not assumed: the real account has two buckets
 (`smallstash-files`, `smallstash-vaults`) and the real production
@@ -850,16 +850,51 @@ substitutes it). **Checked carefully - no real user's data was touched**:
 every fake item's PK is `user-<nanotime>`-shaped, never a UUID, so nothing
 collided with a real Cognito sub.
 
-**Deliberately not fixed right now** - the user's call, not an oversight:
-comfortable using real AWS during this development phase, plans a full
-`cdk destroy`/`cdk deploy` cycle plus a rotated invite code once the feature
-set is polished, which clears all of this (and the manually-cleaned
-orphaned file objects from the earlier incident) for free. If that plan
-changes before then, the actual fix is giving test runs their own
-obviously-test-only bucket/table names (`application-test.properties`) that
-don't collide with any real default - makes a future LocalStack-injection
-failure fail loud (`NoSuchBucket`/`ResourceNotFoundException`) instead of
-silently mutating production.
+**Initially accepted, not fixed** (2026-08-28) - the user's call: comfortable
+using real AWS during development, given the planned `cdk destroy`/`cdk
+deploy` cycle would clear it anyway. After that destroy actually ran
+(2026-08-29) and left two more orphaned buckets from a fresh test run, asked
+to fix it properly instead.
+
+**Root cause, found by direct evidence, not more guessing**: added
+`application-test.properties` to each module first (test-only bucket/table
+names, e.g. `smallstash-test-vaults-do-not-use`) so a future failure would
+at least be obviously fake rather than production-shaped - useful, but a
+containment, not the fix. Then reproduced the failure on demand: temporarily
+enabled `software.amazon.awssdk.request` DEBUG logging and ran the same test
+4 times in a row. **Every single run sent its S3 requests to the real
+`*.s3.eu-west-1.amazonaws.com` endpoint, never LocalStack** - not
+intermittent, 100% reproducible. Cross-checked against the obvious
+suspect: `docker`/`where docker` find nothing on this shell's `PATH` in
+either direction. Conclusion: **Docker has likely never actually been
+reachable from this sandbox**, and an earlier claim in this same session
+("`./mvnw test` reaching the real Docker engine, confirmed") was itself a
+false positive - tests passing was never proof LocalStack was used, since
+the same CRUD assertions pass identically against real AWS. That wrong
+claim is corrected in `CLAUDE.md` directly (twice now - see its own
+"Working agreements" section for the full history of getting this wrong
+in two different ways).
+
+**The actual fix**: since Docker's unreachability isn't something a config
+change can fix, added a `LocalStackGuard` (test-scope only, `src/test/java`
+in both `vault-lambda` and `files-lambda` - never ships in the deployed
+jar) - a `BeanCreatedEventListener` that checks whether the `S3Client`/
+`DynamoDbClient` bean actually has a LocalStack endpoint override, and
+throws immediately if not, failing the whole test run loudly instead of
+silently proceeding against real infrastructure. Verified: with the guard
+active, all 5 `vault-lambda` tests now fail with a clear, specific message
+naming the real problem - and critically, **no real bucket was created by
+that run** (confirmed via `aws s3api list-buckets` immediately after),
+proving the guard blocks before any real AWS operation happens, not after.
+All resources this investigation created (test-named and production-shaped
+alike) were manually cleaned up.
+
+**Known consequence, not a regression**: `mvn test` for `vault-lambda`/
+`files-lambda` will now genuinely fail in this sandbox until Docker is
+reachable here - correct and intended. A LocalStack-capable environment
+(e.g. the user's own machine, if Docker Desktop works there) would pass
+these same tests normally, guard included, since the guard only trips when
+the endpoint override is actually missing.
 
 ### ✅ File tagging done 2026-08-28 - "Option B" from three grouping options discussed
 
@@ -2931,6 +2966,27 @@ fields don't do anything yet:
 
 ## Deferred - revisit later, not blocking anything now
 
+- [ ] **Install/enable Docker so `mvn test` can actually run LocalStack**
+      (2026-08-29). Confirmed Docker isn't reachable in this sandbox at all
+      - `LocalStackGuard` now fails those tests loudly instead of silently
+      hitting real AWS, but nothing here makes Docker itself available.
+      Needed wherever these tests are meant to actually pass.
+- [ ] **Re-create `smallstash-deployer` before the next deploy** (2026-08-29).
+      User is manually deleting the IAM user for security reasons - `cdk
+      deploy`/`cdk destroy` need it back first. Everything needed:
+      1. Run `infra/scripts/create-deployer-user.sh` (in CloudShell, as
+         root) - creates the user, attaches AWS-managed
+         `PowerUserAccess`, and puts an inline policy scoped to
+         `smallstash-*`/`cdk-*` IAM roles/policies only (the script now
+         has the `iam:PassedToService`-conditioned PassRole fix baked in,
+         not the old unconditioned one - see docs/todo.md's IAM-diagnostic
+         entries earlier this session for why).
+      2. The script prints a new access key **once** - `aws configure
+         --profile smallstash` (or overwrite default) locally with it
+         immediately.
+      3. If ever diagnosing IAM/S3 issues again, the temporary read-only
+         `Temp*` statements from that same investigation are gone with the
+         old user - don't recreate them unless actually debugging again.
 - [ ] **AWS WAF** - rate-based rules, IP reputation, basic bot protection.
       Real monthly cost (~$5+/mo minimum + per-request) - reconsider once/if
       actual abuse is observed, not preemptively for a solo-user app.
