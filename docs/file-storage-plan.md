@@ -807,6 +807,54 @@ non-cyclic graph needs.
 changeset error, not just the template graph - the next deploy attempt is
 the real test.
 
+### Phase 1 addendum #3 (2026-08-27/28) - a real live `s3:ListBucket AccessDeniedException`, root-caused
+
+The addendum #2 deploy succeeded, but the very first live use of
+`FilesFunction` failed with `s3:ListBucket AccessDeniedException`. An
+extensive IAM-side investigation (role/resource/policy content all matched
+the deployed template exactly; `iam:simulate-principal-policy` with the real
+`s3:prefix` value returned `allowed`; no permissions boundary, no hidden
+policies, no Service Control Policies, no bucket-policy `Deny`) ruled out
+everything about the policy *as understood at the time* - and that
+understanding turned out to be the actual bug: the whole investigation had
+assumed the failure was in `mint`/`commit` (the only code path that calls
+`FilesUsageService.currentUsageBytes()`, the only known `ListBucket` call
+site). It wasn't.
+
+**Real root cause, found via CloudWatch Logs Insights timestamp-window
+correlation** (not `@requestId` filtering - that field is consistently
+`MISSING` for this app's own log lines, platform `START`/`END`/`REPORT`
+sentinels only) **cross-referenced against the API Gateway access log**:
+every failing request was `GET /files-index`, never an upload.
+`FilesIndexController.get()` only calls `s3:GetObject`, which *is* granted
+- but hit a deliberate, documented S3 behavior: `GetObject` on a
+**nonexistent** key, without `s3:ListBucket` covering it, returns `403`
+(blaming `ListBucket`) instead of a clean `404`, so an unauthorized caller
+can't use that distinction to probe key existence. The test account had
+never uploaded a file, so `files-index.json.enc` genuinely didn't exist -
+and the `ListBucket` grant's `s3:prefix` condition (`users/*/files/*`, sec 8's
+original scoping for the quota-listing use case only) doesn't cover that
+key at all, since it lives directly under `users/<sub>/`, one level above
+the `files/` subfolder. Every brand-new user's first-ever visit to the Files
+tab would hit this.
+
+**Fix**: widened the condition to `users/*`, matching the scope
+`GetObject`/`PutObject` already cover on this role - not a new grant, just
+correcting a condition scoped narrower than the rest of the role's own
+permissions already are. The temporary diagnostic log line added to chase
+this (in `FilesUsageService`) was removed once the real cause was found -
+it never fired for the failing requests (confirming, correctly, that they
+weren't going through that method at all), which is what redirected the
+investigation to check *which endpoint* was actually failing via the API
+Gateway access log, rather than continuing to assume it was mint/commit
+with some hard-to-see runtime-value problem.
+
+**Verified**: `./mvnw test` 20/20, local `cdk synth` confirms the widened
+condition in the synthesized template (`"s3:prefix": "users/*"`).
+
+**Not yet done**: an actual `cdk deploy` of this specific fix, and
+confirming a brand-new user's first Files-tab visit succeeds live.
+
 ### Phase 2 - what was actually done, and a Phase 1 gap it uncovered
 
 ⚠️ **A real gap in Phase 1, found before it caused a problem**: starting

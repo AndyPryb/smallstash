@@ -492,6 +492,28 @@ public class SmallstashStack extends Stack {
         // the s3:prefix condition is the closest available restriction,
         // limiting what prefixes this role may list even though it can't
         // limit which bucket.
+        //
+        // ⚠️ Correction (found by a real live incident, 2026-08-27/28 - see
+        // docs/todo.md's write-up): the condition below was originally
+        // `users/*/files/*`, scoped to just the quota-listing use case above.
+        // That was too narrow, and broke something unrelated to quota
+        // entirely: `FilesIndexController.get()`'s GetObject on
+        // `files-index.json.enc` - which lives directly under `users/<sub>/`,
+        // *outside* the `files/` subfolder - started throwing
+        // `AccessDeniedException` (blaming ListBucket) instead of a clean 404
+        // for any user who has never uploaded a file yet, i.e. every brand
+        // new user opening the Files tab for the first time. This isn't a
+        // CDK/IAM-propagation bug; it's a well-documented, deliberate S3
+        // behavior: GetObject on a *nonexistent* key, without ListBucket
+        // permission covering it, returns 403 rather than 404, specifically
+        // so an unauthorized caller can't use the 403-vs-404 distinction to
+        // probe whether a key exists. GetObject/PutObject already cover the
+        // whole `users/*` tree (index blob included), so ListBucket's own
+        // condition needs to match that same scope, not just the narrower
+        // `files/` subfolder the quota check happens to enumerate - widening
+        // it here doesn't hand out anything this role doesn't already have
+        // via GetObject/PutObject, it just lets S3 answer "doesn't exist"
+        // honestly across the same keyspace those actions already reach.
         filesFunction.addToRolePolicy(PolicyStatement.Builder.create()
                 .actions(List.of("s3:GetObject", "s3:PutObject", "s3:PutObjectTagging"))
                 .resources(List.of(filesBucket.getBucketArn() + "/users/*"))
@@ -503,7 +525,7 @@ public class SmallstashStack extends Stack {
         filesFunction.addToRolePolicy(PolicyStatement.Builder.create()
                 .actions(List.of("s3:ListBucket"))
                 .resources(List.of(filesBucket.getBucketArn()))
-                .conditions(Map.of("StringLike", Map.of("s3:prefix", "users/*/files/*")))
+                .conditions(Map.of("StringLike", Map.of("s3:prefix", "users/*")))
                 .build());
         // Deliberately no dynamodb:* statement at all - this Lambda never
         // touches the users table. The files index is an S3 blob
