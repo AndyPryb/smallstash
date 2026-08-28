@@ -1061,6 +1061,31 @@ Not deployed yet (needs the standard explicit confirmation, as always) -
 the live stack currently still has the SnapStart config from the earlier
 deploy until this revert ships.
 
+### ✅ FileListItem layout - buttons pinned right, tags moved into the left column (2026-08-28)
+
+Raised by the user: tags/tag-edit previously rendered as their own
+full-width block *below* `.summary`, so the Download/Delete buttons'
+visual position wasn't consistent - it depended on whatever else was on
+the row. Moved both the tag-pill display and the tag-edit form inside
+`.details` (the left column), right after the size/date line, so `.summary`
+is a clean two-column layout: a left column that can grow as tall as it
+needs to (name, meta, tags, or the tag-edit form) and a right column
+(`.actions`) that's pinned to a fixed position regardless. Two small
+follow-on CSS fixes this required: `.summary`'s `align-items` changed from
+`center` to `flex-start` (otherwise the button column would vertically
+centre against a left column that's now often much taller), and the
+mobile media query's `.actions` rule changed from `align-self: stretch;
+justify-content: space-between` to `align-self: flex-end` - in a
+column-flow layout, `align-self` (not `justify-content`) is what positions
+the whole actions block at the row's right edge; the old rule only
+controlled how Download/Delete sat *relative to each other*, not where the
+block itself landed, so mobile wasn't actually "always right" either
+before this.
+
+**Verified**: `npm test` 185/185 (unaffected - no component-level test
+coverage for this file, same standing gap as the rest of the Files tab),
+`npm run build` clean.
+
 ### ✅ Bundle download (zip), 2026-08-28 - "Download all" / "Download N files" by tag
 
 New dependency: **`fflate`** (~8 KB, zero dependencies, synchronous
