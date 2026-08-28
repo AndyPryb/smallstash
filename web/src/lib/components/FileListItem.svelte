@@ -100,7 +100,61 @@
     <div class="details">
       <span class="name">{file.name}</span>
       <span class="meta">{formatFileSize(file.sizeBytes)} · uploaded {uploadedOn}</span>
+
+      {#if editingTags}
+        <div class="tag-edit">
+          <div class="tag-edit-fields">
+            {#each tagInputs as _, i}
+              <div class="tag-edit-field">
+                <input
+                  type="text"
+                  bind:value={tagInputs[i]}
+                  placeholder="Tag"
+                  aria-label="Tag {i + 1} for {file.name}"
+                  disabled={savingTags}
+                  onkeydown={handleTagFieldKeydown}
+                />
+                {#if tagInputs.length > 1}
+                  <button
+                    type="button"
+                    class="tag-field-remove"
+                    onclick={() => removeTagField(i)}
+                    disabled={savingTags}
+                    aria-label="Remove tag field {i + 1}"
+                  >
+                    ✕
+                  </button>
+                {/if}
+              </div>
+            {/each}
+            <button type="button" class="compact tag-field-add" onclick={addTagField} disabled={savingTags}>
+              + Tag
+            </button>
+          </div>
+          <div class="tag-edit-actions">
+            <button type="button" class="compact" onclick={handleSaveTags} disabled={savingTags}>
+              {savingTags ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" class="compact" onclick={cancelEditTags} disabled={savingTags}>Cancel</button>
+          </div>
+        </div>
+      {:else}
+        <div class="tags">
+          {#each tags as tag (tag)}
+            <span class="tag">{tag}</span>
+          {/each}
+          <button type="button" class="tag-edit-toggle compact" onclick={startEditTags}>
+            {tags.length ? 'Edit tags' : '+ Add tags'}
+          </button>
+        </div>
+      {/if}
     </div>
+
+    <!-- A fixed right-hand column, not a row that trails after the tags -
+         with tags now living inside .details (which can grow to several
+         lines), the actions column needs to stay pinned to a consistent
+         top-right position regardless of how tall that content gets, not
+         drift based on it. -->
     <div class="actions">
       <button type="button" class="compact" onclick={ondownload} disabled={downloading}>
         {downloading ? 'Downloading…' : 'Download'}
@@ -108,54 +162,6 @@
       <button type="button" class="delete compact" onclick={handleRemove} aria-label="Delete {file.name}">✕</button>
     </div>
   </div>
-
-  {#if editingTags}
-    <div class="tag-edit">
-      <div class="tag-edit-fields">
-        {#each tagInputs as _, i}
-          <div class="tag-edit-field">
-            <input
-              type="text"
-              bind:value={tagInputs[i]}
-              placeholder="Tag"
-              aria-label="Tag {i + 1} for {file.name}"
-              disabled={savingTags}
-              onkeydown={handleTagFieldKeydown}
-            />
-            {#if tagInputs.length > 1}
-              <button
-                type="button"
-                class="tag-field-remove"
-                onclick={() => removeTagField(i)}
-                disabled={savingTags}
-                aria-label="Remove tag field {i + 1}"
-              >
-                ✕
-              </button>
-            {/if}
-          </div>
-        {/each}
-        <button type="button" class="compact tag-field-add" onclick={addTagField} disabled={savingTags}>
-          + Tag
-        </button>
-      </div>
-      <div class="tag-edit-actions">
-        <button type="button" class="compact" onclick={handleSaveTags} disabled={savingTags}>
-          {savingTags ? 'Saving…' : 'Save'}
-        </button>
-        <button type="button" class="compact" onclick={cancelEditTags} disabled={savingTags}>Cancel</button>
-      </div>
-    </div>
-  {:else}
-    <div class="tags">
-      {#each tags as tag (tag)}
-        <span class="tag">{tag}</span>
-      {/each}
-      <button type="button" class="tag-edit-toggle compact" onclick={startEditTags}>
-        {tags.length ? 'Edit tags' : '+ Add tags'}
-      </button>
-    </div>
-  {/if}
 </li>
 
 <style>
@@ -176,7 +182,11 @@
 
   .summary {
     display: flex;
-    align-items: center;
+    /* flex-start, not center: .details can now grow tall (tags, or the
+       tag-edit form, both live inside it) and the actions column should
+       stay pinned to the top-right rather than drifting to vertically
+       centre against however tall that content happens to be. */
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--ss-space-3);
     width: 100%;
@@ -311,9 +321,13 @@
       flex-direction: column;
       align-items: flex-start;
     }
+    /* align-self, not justify-content: in a column-flow .summary, this is
+       what positions the whole actions block at the row's right edge
+       (justify-content would only control how Download/Delete sit relative
+       to *each other* inside it) - "always aligned to the right" applies
+       here too, not just the two-column desktop layout above. */
     .actions {
-      align-self: stretch;
-      justify-content: space-between;
+      align-self: flex-end;
     }
   }
 </style>
