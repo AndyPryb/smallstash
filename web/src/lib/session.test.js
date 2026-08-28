@@ -538,6 +538,141 @@ test('removeFile: rejects while offline-unlocked', async () => {
   await assert.rejects(() => session.removeFile('anything'), /cannot delete files while offline/i);
 });
 
+test('uploadFile: normalizes tags - trims, drops empties, de-duplicates', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => null);
+  filesMocks.mintFileUpload.mock.mockImplementation(async () => ({
+    fileId: 'file-1',
+    upload: { url: 'https://example.invalid/upload', headers: {} },
+  }));
+  filesMocks.uploadFileBytes.mock.mockImplementation(async () => {});
+  filesMocks.commitFileUpload.mock.mockImplementation(async () => ({ sizeBytes: 1 }));
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async () => {});
+
+  const entry = await session.uploadFile(
+    fakeFile('doc.pdf', 'application/pdf', new Uint8Array([1])),
+    [' taxes ', '2026', '', '  ', 'taxes'],
+  );
+
+  assert.deepEqual(entry.tags, ['taxes', '2026']);
+});
+
+test('uploadFile: defaults to no tags when none are given', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => null);
+  filesMocks.mintFileUpload.mock.mockImplementation(async () => ({
+    fileId: 'file-1',
+    upload: { url: 'https://example.invalid/upload', headers: {} },
+  }));
+  filesMocks.uploadFileBytes.mock.mockImplementation(async () => {});
+  filesMocks.commitFileUpload.mock.mockImplementation(async () => ({ sizeBytes: 1 }));
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async () => {});
+
+  const entry = await session.uploadFile(fakeFile('doc.pdf', 'application/pdf', new Uint8Array([1])));
+
+  assert.deepEqual(entry.tags, []);
+});
+
+test('updateFileTags: replaces the tag set and leaves every other file untouched', async () => {
+  const masterPassword = 'a master password';
+  const { vaultKey } = await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  const filesCrypto = await import('./crypto/files.js');
+  const target = {
+    id: 'target-file',
+    name: 'a.txt',
+    mimeType: 'text/plain',
+    sizeBytes: 1,
+    wrappedFileKey: await filesCrypto.wrapFileKey(vaultKey, filesCrypto.generateFileKey()),
+    createdAt: new Date().toISOString(),
+    tags: ['old-tag'],
+  };
+  const other = { ...target, id: 'other-file', tags: ['unrelated'] };
+  const indexCiphertext = await filesCrypto.encryptFilesIndex(vaultKey, { files: [target, other] });
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => ({
+    ciphertextBase64: indexCiphertext,
+    updatedAt: new Date().toISOString(),
+  }));
+  let savedCiphertextBase64;
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async (_token, ciphertextBase64) => {
+    savedCiphertextBase64 = ciphertextBase64;
+  });
+
+  const updated = await session.updateFileTags('target-file', [' Taxes ', 'Taxes', '2026']);
+
+  assert.deepEqual(updated.tags, ['Taxes', '2026']);
+  const savedDocument = await filesCrypto.decryptFilesIndex(vaultKey, savedCiphertextBase64);
+  assert.deepEqual(
+    savedDocument.files.find((f) => f.id === 'target-file').tags,
+    ['Taxes', '2026'],
+  );
+  assert.deepEqual(
+    savedDocument.files.find((f) => f.id === 'other-file').tags,
+    ['unrelated'],
+    "another file's tags must be untouched",
+  );
+});
+
+test('updateFileTags: an empty list clears every tag', async () => {
+  const masterPassword = 'a master password';
+  const { vaultKey } = await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  const filesCrypto = await import('./crypto/files.js');
+  const target = {
+    id: 'target-file',
+    name: 'a.txt',
+    mimeType: 'text/plain',
+    sizeBytes: 1,
+    wrappedFileKey: await filesCrypto.wrapFileKey(vaultKey, filesCrypto.generateFileKey()),
+    createdAt: new Date().toISOString(),
+    tags: ['old-tag'],
+  };
+  const indexCiphertext = await filesCrypto.encryptFilesIndex(vaultKey, { files: [target] });
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => ({
+    ciphertextBase64: indexCiphertext,
+    updatedAt: new Date().toISOString(),
+  }));
+  filesIndexMocks.putFilesIndex.mock.mockImplementation(async () => {});
+
+  const updated = await session.updateFileTags('target-file', []);
+
+  assert.deepEqual(updated.tags, []);
+});
+
+test('updateFileTags: rejects a file id that is not in the index, without saving anything', async () => {
+  const masterPassword = 'a master password';
+  await primeOnlineAccount({ masterPassword });
+  await session.signInAndUnlock('person@example.com', 'login-password', masterPassword);
+
+  filesIndexMocks.getFilesIndex.mock.mockImplementation(async () => null);
+
+  await assert.rejects(() => session.updateFileTags('does-not-exist', ['x']), /no files found/i);
+  assert.equal(filesIndexMocks.putFilesIndex.mock.callCount(), 0);
+});
+
+test('updateFileTags: rejects with no active session', async () => {
+  await assert.rejects(() => session.updateFileTags('anything', ['x']), /no active session/i);
+  assert.equal(filesIndexMocks.putFilesIndex.mock.callCount(), 0);
+});
+
+test('updateFileTags: rejects while offline-unlocked', async () => {
+  const masterPassword = 'a master password';
+  const { sub } = await primeOfflineCache({ masterPassword });
+  await session.unlockOffline(sub, masterPassword);
+
+  await assert.rejects(() => session.updateFileTags('anything', ['x']), /cannot update tags while offline/i);
+});
+
 // --- changeMasterPassword ------------------------------------------------
 
 test('changeMasterPassword: rejects with no active session', async () => {

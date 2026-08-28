@@ -21,7 +21,7 @@
    * way VaultView's does.
    */
   import { onMount } from 'svelte';
-  import { listFiles, uploadFile, downloadFile, removeFile } from '../session.js';
+  import { listFiles, uploadFile, downloadFile, removeFile, updateFileTags } from '../session.js';
   import { saveArtifact } from '../saveFile.js';
   import { MAX_FILE_SIZE_BYTES } from '../crypto/files.js';
   import { formatFileSize } from '../formatFileSize.js';
@@ -42,10 +42,38 @@
    * time keeps this a plain value instead of a Set, and downloading two
    * files at once isn't a real need. */
   let downloadingId = $state(null);
+  /** Same one-at-a-time reasoning as downloadingId, for the tag-edit save. */
+  let savingTagsId = $state(null);
   let actionError = $state('');
 
   /** @type {HTMLInputElement | undefined} */
   let fileInput;
+
+  // Every distinct tag currently in use, across every file - the filter
+  // bar's own set of choices. Derived rather than tracked separately: it
+  // can never drift from what's actually on the files, because it's
+  // computed from them directly every time `files` changes.
+  let allTags = $derived([...new Set(files.flatMap((f) => f.tags ?? []))].sort((a, b) => a.localeCompare(b)));
+
+  /** @type {Set<string>} */
+  let selectedTags = $state(new Set());
+
+  /** @param {string} tag */
+  function toggleTagFilter(tag) {
+    const next = new Set(selectedTags);
+    if (next.has(tag)) next.delete(tag);
+    else next.add(tag);
+    selectedTags = next;
+  }
+
+  // OR, not AND: "show anything tagged taxes or 2026" reads as the natural
+  // meaning of clicking both chips, and matches how the filter bar itself
+  // presents them - a set of alternatives to narrow by, not a combination
+  // every result must satisfy all of. Unfiltered (nothing selected) shows
+  // everything, same as today's behaviour before this feature existed.
+  let visibleFiles = $derived(
+    selectedTags.size === 0 ? files : files.filter((f) => (f.tags ?? []).some((t) => selectedTags.has(t))),
+  );
 
   onMount(async () => {
     await refresh();
@@ -123,6 +151,20 @@
     }
   }
 
+  /** @param {string} fileId @param {string[]} tags */
+  async function handleEditTags(fileId, tags) {
+    actionError = '';
+    savingTagsId = fileId;
+    try {
+      const updated = await updateFileTags(fileId, tags);
+      files = files.map((f) => (f.id === fileId ? updated : f));
+    } catch (err) {
+      actionError = err.message ?? String(err);
+    } finally {
+      savingTagsId = null;
+    }
+  }
+
   function handleSignOut() {
     onsignout();
   }
@@ -172,16 +214,37 @@
   {#if loading}
     <p class="hint">Loading your files…</p>
   {:else}
+    {#if allTags.length > 0}
+      <div class="tag-filter" role="group" aria-label="Filter by tag">
+        {#each allTags as tag (tag)}
+          <button
+            type="button"
+            class="tag-chip"
+            class:selected={selectedTags.has(tag)}
+            aria-pressed={selectedTags.has(tag)}
+            onclick={() => toggleTagFilter(tag)}
+          >
+            {tag}
+          </button>
+        {/each}
+        {#if selectedTags.size > 0}
+          <button type="button" class="compact" onclick={() => (selectedTags = new Set())}>Clear filter</button>
+        {/if}
+      </div>
+    {/if}
+
     <ul class="entries">
-      {#each files as file (file.id)}
+      {#each visibleFiles as file (file.id)}
         <FileListItem
           {file}
           downloading={downloadingId === file.id}
+          savingTags={savingTagsId === file.id}
           ondownload={() => handleDownload(file)}
           onremove={() => handleRemove(file.id)}
+          onedittags={(tags) => handleEditTags(file.id, tags)}
         />
       {:else}
-        <li class="empty">No files yet.</li>
+        <li class="empty">{files.length === 0 ? 'No files yet.' : 'No files match the selected tags.'}</li>
       {/each}
     </ul>
   {/if}
@@ -217,6 +280,38 @@
     align-items: center;
     flex-wrap: wrap;
     gap: var(--ss-space-2);
+  }
+
+  .tag-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-space-2);
+  }
+
+  /* Toggle buttons, not the app's usual .compact button - a selected chip
+     needs its own persistent "on" look (filled, accent-coloured) rather
+     than just a hover/focus state, since several can be active at once and
+     the whole point is seeing which at a glance. */
+  .tag-chip {
+    padding: 0.25em 0.85em;
+    background: var(--ss-surface);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-full, 999px);
+    color: var(--ss-text-muted);
+    font-size: var(--ss-text-sm);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+
+  .tag-chip:hover {
+    border-color: var(--ss-border-strong);
+  }
+
+  .tag-chip.selected {
+    background: var(--ss-accent-quiet);
+    border-color: var(--ss-accent);
+    color: var(--ss-accent);
   }
 
   .entries {
