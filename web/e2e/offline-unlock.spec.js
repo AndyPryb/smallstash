@@ -8,28 +8,37 @@ import { testUserEmail, testUserPassword, testUserMasterPassword } from './env.j
  * as the motivating case for offline testing).
  */
 test.describe('Offline unlock', () => {
-  // CONFIRMED BUG (2026-08-25) - see docs/todo.md "PWA: offline access to
-  // key material". Root cause: the PWA's service worker precache glob is
-  // `['**/*.{js,css,html,svg,woff2}']` - .json is never included, and there
-  // was no `runtimeCaching` rule for `/config.json` either, so it always
-  // hit the network with zero offline fallback and the app couldn't finish
-  // booting offline at all.
+  // Long history worth keeping, since this feature took three real bugs to
+  // actually work - each one only surfaced by running this exact spec
+  // against the live site, not by code review or unit tests:
   //
-  // FIX IMPLEMENTED (2026-08-25, vite.config.js - a NetworkFirst
-  // runtimeCaching rule for /config.json) and verified working at the
-  // mechanism level via a standalone script against `npm run preview`:
-  // offline fetch('/config.json') now returns 200 from cache, and the
-  // "failed to load its configuration" error no longer appears.
+  // 1. CONFIRMED BUG (2026-08-25) - the service worker's precache glob
+  //    never included `/config.json`, and there was no runtime-caching rule
+  //    for it either, so it always hit the network with zero offline
+  //    fallback and the app couldn't finish booting offline at all.
+  // 2. "FIXED" (2026-08-25) with a Workbox `runtimeCaching` NetworkFirst
+  //    rule - looked right, confirmed present in the live sw.js, but still
+  //    failed for real (2026-09-13): the very first page load, the one
+  //    where config.js's fetch happens at boot, is never controlled by a
+  //    service worker that's still installing, so that first fetch never
+  //    passed through the rule and nothing was ever cached.
+  // 3. Fixed properly (2026-09-13) by having config.js cache the response
+  //    itself, directly via the Cache Storage API - no dependency on SW
+  //    activation timing (see config.js's own doc comment). That exposed a
+  //    second bug: navigator.onLine can read `true` at boot even when
+  //    genuinely offline, if the SW satisfies the reload from precache with
+  //    no network activity to fail. Fixed by having config.js expose
+  //    whether its last load actually reached the network
+  //    (lastConfigLoadWasFromNetwork()), reusing the boot-time fetch as an
+  //    active connectivity probe - which in turn needed `{ cache: 'no-store'
+  //    }` on that fetch, since config.json ships no Cache-Control header
+  //    and a browser's own HTTP heuristic caching (RFC 7234 §4.2.2) was
+  //    silently serving the "offline" reload's fetch from disk cache,
+  //    faking a network success.
   //
-  // test.fail() STAYS for now, deliberately: this suite's default target
-  // is the live deployed site, which doesn't have this fix until the next
-  // `cdk deploy`/frontend redeploy. This exact spec could not be used to
-  // confirm the fix end-to-end locally either - CORS blocks
-  // localhost:4173 from reaching the real API (only the CloudFront origin
-  // is allowed), so a local run fails earlier, on the online step, for an
-  // unrelated reason. Remove test.fail() only after this passes for real
-  // against the live URL post-deploy.
-  test.fail();
+  // Confirmed passing for real against the live deployed site (2026-09-13),
+  // not assumed from source - this is what finally justified removing the
+  // `test.fail()` that lived here through all three attempts above.
   test('a device with a prior online sign-in can unlock while offline', async ({ page, context }) => {
     // Online sign-in first - this is what populates the IndexedDB cache
     // (salt, KDF params, both wrapped Vault Key copies) that offline
