@@ -1,0 +1,15 @@
+# Semgrep is run locally, on demand only (docs/static-analysis.md) - this
+# just keeps it from wasting time/noise on generated output and vendored
+# code, same intent as .gitignore but for what gets *scanned*, not what
+# gets *committed*.
+
+# Build output
+target/
+web/dist/
+infra/cdk.out/
+
+# Dependencies
+node_modules/
+
+# Personal, gitignored notes - never scanned, same as never committed
+docs/learning-notes/

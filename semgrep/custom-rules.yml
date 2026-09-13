@@ -1,0 +1,116 @@
+# Custom Semgrep rules for smallStash, scoped to what generic community
+# rulesets don't already cover well: this repo's specific zero-knowledge
+# invariant (see CLAUDE.md - "Argon2id + AES-256-GCM key derivation/
+# decryption happen ONLY in the browser client... must never receive or be
+# able to derive plaintext vault content or the Master Password").
+#
+# Deliberately NOT wired into CI (see docs/static-analysis.md) - run this
+# locally, on demand:
+#
+#   semgrep scan --config semgrep/custom-rules.yml
+#
+# To also run Semgrep's own free community rulesets in the same pass:
+#
+#   semgrep scan --config auto --config semgrep/custom-rules.yml
+
+rules:
+  - id: no-console-log-of-secret-material
+    languages: [javascript]
+    severity: ERROR
+    message: >-
+      Logging a variable whose name suggests it holds plaintext secret
+      material (Master Password, derived key, vault key, recovery key, or
+      decrypted vault contents). Browser console output can end up in
+      screen recordings, crash reports, or a shared screen - and for a
+      zero-knowledge app, this is exactly the class of data that must never
+      leave the crypto boundary unexamined. If this is intentional local
+      debugging, remove it before committing rather than suppressing this
+      rule.
+    metadata:
+      category: security
+      references:
+        - docs/architecture.md#3-encryption-model-client-side-only-zero-knowledge
+    patterns:
+      - pattern-either:
+          - pattern: console.$METHOD(...)
+      - metavariable-pattern:
+          metavariable: $METHOD
+          patterns:
+            - pattern-either:
+                - pattern: log
+                - pattern: warn
+                - pattern: error
+                - pattern: info
+                - pattern: debug
+      - pattern-either:
+          - pattern: console.$METHOD(<... $SECRET ...>)
+      - metavariable-regex:
+          metavariable: $SECRET
+          # Matches identifiers like masterPassword, vaultKey, derivedKey,
+          # recoveryKey, plaintext(Vault) - case-insensitive, whole
+          # identifier, not a substring of an unrelated name.
+          regex: (?i)^(master[_-]?password|vault[_-]?key|derived[_-]?key|recovery[_-]?key|plain[_-]?text\w*)$
+
+  - id: no-math-random-for-crypto-bytes
+    languages: [javascript]
+    severity: ERROR
+    message: >-
+      Math.random() is not cryptographically secure and must never be used
+      to generate key material, IVs, salts, or recovery keys. Use
+      crypto.getRandomValues() (see web/src/lib/bytes.js's randomBytes
+      helper, which every crypto/ module already goes through).
+    metadata:
+      category: security
+      references:
+        - web/src/lib/bytes.js
+    pattern: Math.random()
+
+  - id: no-hardcoded-static-iv-or-salt
+    languages: [javascript]
+    severity: WARNING
+    message: >-
+      A literal (hardcoded) byte array passed where an IV or salt is
+      expected. Reusing a fixed IV under the same AES-GCM key is the one
+      catastrophic misuse of GCM (see aesgcm.js's own doc comment) - it must
+      be freshly random every time, never a constant.
+    metadata:
+      category: security
+    paths:
+      exclude:
+        - "*.test.js"
+    patterns:
+      - pattern-either:
+          - pattern: "{ iv: new Uint8Array([...]) }"
+          - pattern: "{ salt: new Uint8Array([...]) }"
+
+  - id: no-weak-hash-or-cipher-algorithm-name
+    languages: [javascript, java]
+    severity: ERROR
+    message: >-
+      Reference to a cryptographically weak/deprecated algorithm (MD5, SHA-1,
+      DES, RC4, or AES in ECB mode). This app's crypto is Argon2id (KDF) +
+      AES-256-GCM (encryption), see docs/architecture.md sec 3 - nothing
+      else should appear in the crypto path.
+    metadata:
+      category: security
+    pattern-regex: (?i)(AES/ECB|"DES"|'DES'|"MD5"|'MD5'|"SHA-?1"|'SHA-?1'|"RC4"|'RC4')
+
+  - id: java-no-log-of-sensitive-parameter
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Logging a value whose name suggests it is secret vault material
+      (Master Password, vault key, plaintext, decrypted content). The
+      backend must never receive plaintext or the Master Password at all
+      (see CLAUDE.md's zero-knowledge invariant) - if a variable with this
+      name exists server-side, that alone is worth double-checking, and
+      logging it compounds the problem into a persistent CloudWatch record.
+    metadata:
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: LOG.$METHOD(<... $SECRET ...>)
+          - pattern: logger.$METHOD(<... $SECRET ...>)
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (?i)^(masterPassword|vaultKey|derivedKey|recoveryKey|plaintext\w*)$
