@@ -68,7 +68,17 @@ export async function loadConfig() {
 async function fetchAndCacheConfig() {
   let res;
   try {
-    res = await fetch(CONFIG_URL);
+    // no-store, not the default cache mode: confirmed directly (2026-09-13)
+    // that /config.json ships no Cache-Control header, only Last-Modified -
+    // enough for a browser's heuristic HTTP caching (RFC 7234 §4.2.2) to
+    // serve a very recent fetch straight from local disk cache, with zero
+    // network activity, even while genuinely offline. That silently defeats
+    // lastConfigLoadWasFromNetwork() below (a "success" that never touched
+    // the network reads identically to a real one) and risks running on a
+    // stale config within that heuristic freshness window even when online.
+    // no-store forces every call to actually hit the network, which is what
+    // makes the exported network/cache signal trustworthy at all.
+    res = await fetch(CONFIG_URL, { cache: 'no-store' });
   } catch (networkErr) {
     return fallbackToCacheOrThrow(networkErr);
   }
