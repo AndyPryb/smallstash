@@ -1,7 +1,7 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
 import './app.css';
-import { loadConfig } from './lib/config.js';
+import { loadConfig, lastConfigLoadWasFromNetwork } from './lib/config.js';
 
 // Runtime config must resolve before App mounts - session.js/api/client.js
 // read config.* synchronously and throw if it's not loaded yet (see
@@ -17,7 +17,10 @@ async function bootstrap() {
     target.textContent = 'Small Stash failed to load its configuration. Please try refreshing the page.';
     return;
   }
-  mount(App, { target });
+  // Passed through as the initial connectivity signal - see config.js's
+  // lastConfigLoadWasFromNetwork() doc comment for why navigator.onLine
+  // alone isn't trustworthy at boot.
+  mount(App, { target, props: { initiallyOnline: lastConfigLoadWasFromNetwork() } });
 }
 
 bootstrap();
