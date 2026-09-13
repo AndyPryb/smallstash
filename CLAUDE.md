@@ -191,6 +191,7 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
 | Threat model, auth/authorization mechanics, cost-abuse controls | [docs/architecture.md §4a/§4b/§5/§6](docs/architecture.md) |
 | What's still undecided | [docs/open-questions.md](docs/open-questions.md) |
 | "Explain X again" (SRP, JWKS, ...) for the user, not code-relevant | [docs/learning-notes/README.md](docs/learning-notes/README.md) (gitignored) |
+| Static analysis (Semgrep, OWASP Dependency-Check) - local-only, by design | [docs/static-analysis.md](docs/static-analysis.md) |
 
 ## Dev workflow cheat-sheet
 
