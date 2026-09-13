@@ -1012,21 +1012,48 @@ public class SmallstashStack extends Stack {
                 .build()
                 .addAlarmAction(new SnsAction(alertTopic));
 
+        // Same watch on the files Lambda - added 2026-08-27 alongside that
+        // function itself, this alarm wasn't (security review follow-up,
+        // 2026-09-13). Without it, a runaway/abuse loop hitting only
+        // /files* routes would be invisible to CloudWatch until the
+        // Budgets check caught up, hours later.
+        Alarm.Builder.create(this, "FilesInvocationSpikeAlarm")
+                .alarmName("smallstash-files-invocation-spike")
+                .alarmDescription("Files Lambda invocations far above normal - possible abuse or runaway retry loop")
+                .metric(filesFunction.metricInvocations(MetricOptions.builder()
+                        .period(Duration.hours(1))
+                        .statistic("Sum")
+                        .build()))
+                .threshold(200)
+                .evaluationPeriods(1)
+                .comparisonOperator(ComparisonOperator.GREATER_THAN_THRESHOLD)
+                .treatMissingData(TreatMissingData.NOT_BREACHING)
+                .build()
+                .addAlarmAction(new SnsAction(alertTopic));
+
         // ---------------------------------------------------------------
         // Cost kill switch (security review Phase 3)
         //
         // The alarm above is detection; this is containment. When spend on
         // this stack's own budget crosses the limit, AWS Budgets attaches a
-        // Deny policy to the backend Lambda's execution role, and every vault
-        // read and write starts failing. That is deliberately blunt - a full
-        // outage is the intended behaviour, on the reasoning that for a
-        // personal app an unexplained bill is worse than downtime.
+        // Deny policy to both Lambdas' execution roles - backend and
+        // filesFunction alike - and every vault/keys/files read and write
+        // starts failing. That is deliberately blunt - a full outage is the
+        // intended behaviour, on the reasoning that for a personal app an
+        // unexplained bill is worse than downtime.
         //
-        // Two things it deliberately does NOT touch: the root user, and
-        // `smallstash-deployer`. Neither is in the live request path, so
-        // denying them would achieve nothing while removing the very access
-        // needed to investigate and undo this. Recovery is detaching the
-        // policy - no redeploy required.
+        // Originally scoped to `backend` only (2026-08-24), from before
+        // `filesFunction` existed (2026-08-27) - a runaway confined to the
+        // files routes would have burned past the budget with no automatic
+        // containment. Fixed here (security review follow-up, 2026-09-13):
+        // both roles are covered now.
+        //
+        // Three things it deliberately does NOT touch: the root user,
+        // `smallstash-deployer`, and the PreSignUp trigger Lambda (it has no
+        // S3/DynamoDB access to begin with). None are in the live data-plane
+        // request path, so denying them would achieve nothing while removing
+        // the very access needed to investigate and undo this. Recovery is
+        // detaching the policy - no redeploy required.
         //
         // The budget is created *here* rather than referencing one made in
         // the console: a CfnBudgetsAction has to name its budget, and pointing
@@ -1079,12 +1106,12 @@ public class SmallstashStack extends Stack {
                 .build();
 
         // Scoped hard in both directions: this role may attach only *this*
-        // policy, and only to *this* Lambda's role. AWS's own example grants
-        // attach/detach on "*" for users, groups and roles alike; there's no
-        // reason to hand a budget that much reach.
+        // policy, and only to *these two* Lambdas' roles. AWS's own example
+        // grants attach/detach on "*" for users, groups and roles alike;
+        // there's no reason to hand a budget that much reach.
         budgetActionRole.addToPolicy(PolicyStatement.Builder.create()
                 .actions(List.of("iam:AttachRolePolicy", "iam:DetachRolePolicy"))
-                .resources(List.of(backend.getRole().getRoleArn()))
+                .resources(List.of(backend.getRole().getRoleArn(), filesFunction.getRole().getRoleArn()))
                 .conditions(Map.of("ArnEquals",
                         Map.of("iam:PolicyARN", killSwitchPolicy.getManagedPolicyArn())))
                 .build());
@@ -1113,7 +1140,7 @@ public class SmallstashStack extends Stack {
                     .definition(CfnBudgetsAction.DefinitionProperty.builder()
                             .iamActionDefinition(CfnBudgetsAction.IamActionDefinitionProperty.builder()
                                     .policyArn(killSwitchPolicy.getManagedPolicyArn())
-                                    .roles(List.of(backend.getRole().getRoleName()))
+                                    .roles(List.of(backend.getRole().getRoleName(), filesFunction.getRole().getRoleName()))
                                     .build())
                             .build())
                     .subscribers(List.of(CfnBudgetsAction.SubscriberProperty.builder()
