@@ -38,7 +38,11 @@ test.describe('Change Login Password - negative case', () => {
     await page.getByRole('button', { name: 'Change Login Password' }).click();
     await expect(page.getByRole('heading', { name: 'Change Login Password' })).toBeVisible();
 
-    await page.getByLabel('Current login password').fill(testUserPassword());
+    // Anchored regex, not a plain string - a bare 'Current login password'
+    // also substring-matches the "Show current login password" toggle
+    // button's aria-label, the same getByLabel quirk the fields below
+    // already guard against.
+    await page.getByLabel(/^Current login password/i).fill(testUserPassword());
     // Deliberately weak - ChangeLoginPasswordForm has no client-side
     // pattern check (unlike SignupForm), only a match check, so this
     // reaches Cognito's own InvalidPasswordException. Anchored regex, not a

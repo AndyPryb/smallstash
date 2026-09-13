@@ -94,32 +94,23 @@ export default defineConfig(({ mode }) => {
           // config.json is deliberately NOT in globPatterns above - it's
           // .json, generated fresh per deploy (infra/'s ConfigDeployment),
           // not a static build asset with a content-hashed filename the
-          // precache manifest can pin. Without this runtime rule the app
-          // was completely unable to boot offline: config.js's
-          // fetch('/config.json') always went straight to the network, so
-          // going offline and reloading failed before ever reaching the
-          // offline-unlock code path it exists for - confirmed live via
-          // web/e2e/offline-unlock.spec.js (2026-08-25), which is what
-          // caught this.
+          // precache manifest can pin.
           //
-          // NetworkFirst, not CacheFirst: online, always prefer the current
-          // config over a stale cached one (this is what changes on every
-          // full stack recreate - a stale pool/client ID here would be
-          // actively wrong, not just outdated). Offline, or if the network
-          // takes longer than networkTimeoutSeconds, fall back to whatever
-          // was cached from the last successful online load. maxEntries: 1
-          // because there is only ever one config.json worth caching.
-          runtimeCaching: [
-            {
-              urlPattern: ({ url }) => url.pathname === '/config.json',
-              handler: 'NetworkFirst',
-              options: {
-                cacheName: 'smallstash-config',
-                networkTimeoutSeconds: 3,
-                expiration: { maxEntries: 1 },
-              },
-            },
-          ],
+          // A Workbox runtimeCaching rule used to live here instead of what
+          // follows - removed 2026-09-13. It looked right (NetworkFirst,
+          // confirmed present in the built sw.js, confirmed byte-identical
+          // between local dist/ and the live deployed site) but still
+          // failed a real end-to-end offline-unlock run: the very first
+          // page load - the one where config.js's fetch('/config.json')
+          // actually happens, at boot - is never controlled by the service
+          // worker that's still installing/activating in the background, so
+          // that first request never passed through this rule at all and
+          // nothing was ever cached for a later offline reload to use.
+          // Fixed at the source instead: `src/lib/config.js` now writes the
+          // successful response into Cache Storage itself, directly, with
+          // no dependency on SW activation timing - see its own doc comment
+          // for the full explanation. See web/e2e/offline-unlock.spec.js
+          // for the regression test.
         },
         devOptions: { enabled: false },
       }),

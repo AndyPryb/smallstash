@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import LoginForm from './lib/components/LoginForm.svelte';
   import SignupForm from './lib/components/SignupForm.svelte';
   import ForgotPasswordForm from './lib/components/ForgotPasswordForm.svelte';
@@ -17,6 +17,23 @@
     listFiles,
   } from './lib/session.js';
 
+  /**
+   * `initiallyOnline` - main.js's real answer to "did we just reach the
+   * server", from the config.json fetch every boot already makes (see
+   * config.js's `lastConfigLoadWasFromNetwork()` doc comment). Preferred
+   * over `navigator.onLine` for this initial value: confirmed directly
+   * (2026-09-13) that `navigator.onLine` can still read `true` at boot even
+   * when the browser is genuinely offline, if a service worker satisfies the
+   * page load entirely from its own precache without any network activity
+   * for the browser to notice failing. `navigator.onLine` remains what the
+   * `online`/`offline` listeners below react to during the session - this
+   * prop only fixes the *initial* read, and only when actually provided
+   * (falls back to the old behaviour otherwise, e.g. any future direct
+   * mount that skips main.js's bootstrap).
+   * @type {{ initiallyOnline?: boolean | null }}
+   */
+  let { initiallyOnline = null } = $props();
+
   /** @type {'login' | 'signup' | 'forgot-password'} */
   let authMode = $state('login');
   let notice = $state('');
@@ -26,12 +43,20 @@
   let error = $state('');
   let loading = $state(false);
 
-  // navigator.onLine reflects the OS/browser's own view of connectivity -
-  // reliable for "definitely offline" (e.g. airplane mode), less reliable
-  // for "connected to wifi with no real internet" (captive portals etc.),
-  // which is what forceOffline (set from a failed login attempt below)
-  // covers instead.
-  let online = $state(navigator.onLine);
+  // forceOffline (set from a failed login attempt below) covers the
+  // "connected to wifi with no real internet" case navigator.onLine misses
+  // even once the initial-boot gap above is closed.
+  //
+  // untrack(): deliberately a one-time seed, not a live binding -
+  // `initiallyOnline` is a plain value passed once at mount (main.js never
+  // updates it), and `online` diverges from it immediately afterwards via
+  // the online/offline listeners below. Without untrack(), Svelte's
+  // state_referenced_locally warning fires here for the same reason it once
+  // did on Alert.svelte's `role` and FileListItem's `uploadedOn` - except
+  // there, the fix was to make the value genuinely reactive ($derived)
+  // because it *should* have tracked its source; here the one-time read is
+  // the actually-correct behaviour, so untrack() is the right way to say so.
+  let online = $state(untrack(() => initiallyOnline ?? navigator.onLine));
   let forceOffline = $state(false);
 
   let lastAccount = $state(getLastAccount());
