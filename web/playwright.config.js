@@ -18,11 +18,13 @@ export default defineConfig({
   ],
 
   use: {
-    // The live deployed site. Overridable because the stack's CloudFront
-    // domain changes on every full destroy/recreate (see docs/todo.md
-    // "Live stack outputs") - hardcoding it here would silently start
-    // testing a dead URL after the next teardown.
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'https://ds9wv7ctss47x.cloudfront.net',
+    // The live deployed site, supplied via PLAYWRIGHT_BASE_URL. There is
+    // deliberately no default any more: this line used to carry a hardcoded
+    // CloudFront domain, and the comment here warned that doing so "would
+    // silently start testing a dead URL after the next teardown" - which is
+    // exactly what happened when the stack was destroyed (2026-09-19). A
+    // missing env var now fails loudly instead of testing nothing.
+    baseURL: process.env.PLAYWRIGHT_BASE_URL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

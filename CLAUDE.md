@@ -26,12 +26,18 @@ itself. Full design: [docs/architecture.md](docs/architecture.md).
   commit you plan to amend away.** Treat anything pasted into chat the
   same way: if a real AWS secret key ever appears in a message, rotate it
   immediately rather than treat the leak as contained.
-- **The stack IS deployed** (since 2026-08-23 — an earlier version of this
-  line said otherwise and was wrong). `cdk bootstrap`/`cdk deploy`/`cdk
-  destroy` (or any AWS-account-mutating command) still needs explicit user
-  confirmation before running, **every time** — prior approval doesn't
-  carry over to the next deploy or the next session. Read-only AWS CLI
-  calls (`describe-*`, `get-*`, `list-*`) are fine without asking.
+- **The stack is DECOMMISSIONED as of 2026-09-19.** `cdk destroy` ran
+  cleanly and every AWS resource is gone — stack, Cognito pool, DynamoDB
+  table, all three buckets, and the CDK bootstrap that supported them. It
+  *was* live from 2026-08-23 to 2026-09-19 with real users, so anything
+  below written in the present tense about deployed resources is history,
+  not current state. Standing this back up means `cdk bootstrap` **and**
+  `cdk deploy` from scratch, and every resource gets new identifiers.
+  `cdk bootstrap`/`cdk deploy`/`cdk destroy` (or any AWS-account-mutating
+  command) still needs explicit user confirmation before running, **every
+  time** — prior approval doesn't carry over to the next deploy or the next
+  session. Read-only AWS CLI calls (`describe-*`, `get-*`, `list-*`) are
+  fine without asking.
 - **All three data resources are `RemovalPolicy.DESTROY`, permanently —
   this is a standing decision (2026-08-25), not a pre-production
   placeholder.** RETAIN was evaluated and rejected: on `cdk destroy` it
