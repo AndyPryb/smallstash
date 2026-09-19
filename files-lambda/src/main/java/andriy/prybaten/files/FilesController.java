@@ -91,6 +91,22 @@ public class FilesController {
     static final String TAG_VALUE_PENDING = "pending";
     static final String TAG_VALUE_LIVE = "live";
 
+    /**
+     * Every {@code fileId} this app has ever minted comes from
+     * {@link UUID#randomUUID()}, so a canonical lowercase UUID is the exact
+     * shape of the only legitimate value - see {@link #requireValidFileId}.
+     *
+     * <p>Deliberately a regex rather than {@link UUID#fromString}: that method
+     * is lenient (it accepts {@code 1-1-1-1-1} and other non-canonical forms),
+     * and since the *original* string - not the parsed object - is what gets
+     * concatenated into the S3 key, its leniency would be the thing being
+     * relied on. A strict pattern has no such gap. Lowercase-only breaks
+     * nothing: {@code randomUUID().toString()} never emits uppercase, so no
+     * existing object has a key this rejects.
+     */
+    private static final java.util.regex.Pattern FILE_ID_PATTERN =
+            java.util.regex.Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+
     private final S3Client s3;
     private final S3Presigner presigner;
     private final FilesStorageProperties storageProperties;
@@ -163,6 +179,7 @@ public class FilesController {
      */
     @Get("/{fileId}/url")
     public FileDownloadResponse downloadUrl(Authentication authentication, @PathVariable String fileId) {
+        requireValidFileId(fileId);
         String userSub = CurrentUser.subOf(authentication);
         String key = FilesUsageService.fileKey(userSub, fileId);
 
@@ -183,6 +200,7 @@ public class FilesController {
      */
     @Post("/{fileId}/commit")
     public FileCommitResponse commit(Authentication authentication, @PathVariable String fileId) {
+        requireValidFileId(fileId);
         String userSub = CurrentUser.subOf(authentication);
         String key = FilesUsageService.fileKey(userSub, fileId);
         String bucket = storageProperties.getFilesBucket();
@@ -230,10 +248,34 @@ public class FilesController {
     @Delete("/{fileId}")
     @Status(HttpStatus.NO_CONTENT)
     public void delete(Authentication authentication, @PathVariable String fileId) {
+        requireValidFileId(fileId);
         String userSub = CurrentUser.subOf(authentication);
         s3.deleteObject(DeleteObjectRequest.builder()
                 .bucket(storageProperties.getFilesBucket())
                 .key(FilesUsageService.fileKey(userSub, fileId))
                 .build());
+    }
+
+    /**
+     * Rejects any {@code fileId} that isn't a canonical UUID, before it can
+     * reach {@link FilesUsageService#fileKey} and become part of an S3 key.
+     *
+     * <p>Without this, {@code fileId} was a raw URL path segment concatenated
+     * straight into the key. S3 does not normalise {@code ..} in object keys,
+     * so a value like {@code ../../<other-sub>/files/<id>} would address
+     * another user's object while still passing every authentication check -
+     * the per-user prefix is the <i>only</i> thing isolating one account's
+     * files from another's, and this is what keeps the client from writing
+     * outside its own prefix. Whether API Gateway's own path handling would
+     * have let an encoded {@code %2F} through to begin with was never
+     * established either way; validating here means it no longer matters.
+     *
+     * <p>400, not 404: a malformed id is a bad request, and answering 404
+     * would imply the id was well-formed but absent.
+     */
+    private static void requireValidFileId(String fileId) {
+        if (fileId == null || !FILE_ID_PATTERN.matcher(fileId).matches()) {
+            throw new HttpStatusException(HttpStatus.BAD_REQUEST, "Malformed file id");
+        }
     }
 }
