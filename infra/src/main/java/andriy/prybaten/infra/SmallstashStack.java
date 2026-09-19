@@ -95,6 +95,15 @@ import java.util.Map;
  */
 public class SmallstashStack extends Stack {
 
+    /**
+     * Exposed for {@link CloudFrontAlarmStack}, which has to live in us-east-1
+     * (see that class) and therefore cannot reach the construct directly.
+     */
+    private Distribution distribution;
+
+    /** Exposed for the same reason - that stack needs its own SNS subscriber. */
+    private String alertEmail;
+
     public SmallstashStack(final Construct scope, final String id) {
         this(scope, id, null);
     }
@@ -719,7 +728,7 @@ public class SmallstashStack extends Stack {
         // "key doesn't exist" distinction reaches CloudFront as 404) -
         // rewrite both 403 and 404 to /index.html so the app's own router
         // handles the path instead of the user seeing a raw S3 error.
-        Distribution distribution = Distribution.Builder.create(this, "SiteDistribution")
+        Distribution distribution = this.distribution = Distribution.Builder.create(this, "SiteDistribution")
                 .defaultBehavior(BehaviorOptions.builder()
                         .origin(S3BucketOrigin.withOriginAccessControl(siteBucket))
                         .viewerProtocolPolicy(ViewerProtocolPolicy.REDIRECT_TO_HTTPS)
@@ -978,7 +987,7 @@ public class SmallstashStack extends Stack {
         // minutes on the metric that actually leads the spend.
         // ---------------------------------------------------------------
 
-        String alertEmail = optionalSetting("alertEmail", "SMALLSTASH_ALERT_EMAIL");
+        String alertEmail = this.alertEmail = optionalSetting("alertEmail", "SMALLSTASH_ALERT_EMAIL");
 
         Topic alertTopic = Topic.Builder.create(this, "AlertTopic")
                 .topicName("smallstash-alerts")
@@ -1165,6 +1174,21 @@ public class SmallstashStack extends Stack {
         CfnOutput.Builder.create(this, "SiteUrl")
                 .value("https://" + distribution.getDistributionDomainName())
                 .build();
+    }
+
+    /**
+     * The PWA's CloudFront distribution, for {@link CloudFrontAlarmStack} to
+     * alarm on. Returns the construct rather than just the id so that stack
+     * can use {@code metricRequests(...)} instead of hand-writing the
+     * namespace.
+     */
+    public Distribution getDistribution() {
+        return distribution;
+    }
+
+    /** Where alerts go, or {@code null} if none is configured. */
+    public String getAlertEmail() {
+        return alertEmail;
     }
 
     /**

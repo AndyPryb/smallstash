@@ -155,6 +155,47 @@ class FilesControllerTest {
     }
 
     /**
+     * The path-traversal guard on every {@code fileId}-taking route. A
+     * traversing id must be rejected outright, not merely fail to find an
+     * object: S3 does not normalise {@code ..} in keys, so
+     * {@code ../../<other-sub>/files/<id>} would otherwise address a real
+     * object belonging to a different user, and per-user prefix isolation is
+     * the only thing separating one account's files from another's.
+     *
+     * <p>The non-canonical UUID forms below are the reason
+     * {@code FilesController} matches a strict pattern rather than calling
+     * {@code UUID.fromString}, which accepts them.
+     */
+    @Test
+    void rejectsMalformedFileIds() {
+        Authentication auth = userAuth("user-" + System.nanoTime());
+        String victim = "victim-sub";
+        String realId = UUID.randomUUID().toString();
+
+        for (String bad : new String[] {
+                "../../" + victim + "/files/" + realId,   // traversal into another user's prefix
+                "..%2F..%2F" + victim + "%2Ffiles",       // the encoded form of the same idea
+                realId + "/../../other",                  // traversal appended to a valid id
+                "1-1-1-1-1",                              // UUID.fromString accepts this; we must not
+                realId.toUpperCase(),                     // never minted; keys are case-sensitive
+                "",
+                "not-a-uuid"}) {
+            assertEquals(HttpStatus.BAD_REQUEST,
+                    assertThrows(HttpStatusException.class,
+                            () -> filesController.downloadUrl(auth, bad)).getStatus(),
+                    "downloadUrl should reject: " + bad);
+            assertEquals(HttpStatus.BAD_REQUEST,
+                    assertThrows(HttpStatusException.class,
+                            () -> filesController.commit(auth, bad)).getStatus(),
+                    "commit should reject: " + bad);
+            assertEquals(HttpStatus.BAD_REQUEST,
+                    assertThrows(HttpStatusException.class,
+                            () -> filesController.delete(auth, bad)).getStatus(),
+                    "delete should reject: " + bad);
+        }
+    }
+
+    /**
      * Places an object directly at the key a real upload would have left,
      * pending tag included - skips actually performing the presigned PUT's
      * HTTP round trip, since S3Presigner's own correctness isn't what these

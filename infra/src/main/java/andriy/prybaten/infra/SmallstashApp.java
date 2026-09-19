@@ -20,13 +20,44 @@ public final class SmallstashApp {
     // service coverage, cheapest EU region, chosen 2026-08-20).
     private static final String REGION = "eu-west-1";
 
+    /**
+     * Where {@link CloudFrontAlarmStack} has to go - not a preference. See
+     * that class: CloudFront publishes its CloudWatch metrics only to
+     * us-east-1, and a CloudWatch alarm cannot reference a metric in another
+     * region, so the alarm cannot live in {@link #REGION} with everything
+     * else.
+     */
+    private static final String CLOUDFRONT_METRICS_REGION = "us-east-1";
+
     public static void main(final String[] args) {
         App app = new App();
+        String account = System.getenv("CDK_DEFAULT_ACCOUNT");
         Environment env = Environment.builder()
-                .account(System.getenv("CDK_DEFAULT_ACCOUNT"))
+                .account(account)
                 .region(REGION)
                 .build();
-        new SmallstashStack(app, "SmallstashStack", StackProps.builder().env(env).build());
+
+        // crossRegionReferences: the alarm stack below needs this stack's
+        // distribution id, and a plain CloudFormation export/import is
+        // same-region only. CDK bridges it with an SSM parameter plus a
+        // deploy-time custom resource - both stacks have to opt in, the
+        // producer to publish and the consumer to read.
+        SmallstashStack main = new SmallstashStack(app, "SmallstashStack", StackProps.builder()
+                .env(env)
+                .crossRegionReferences(true)
+                .build());
+
+        new CloudFrontAlarmStack(app, "SmallstashCloudFrontAlarmStack",
+                StackProps.builder()
+                        .env(Environment.builder()
+                                .account(account)
+                                .region(CLOUDFRONT_METRICS_REGION)
+                                .build())
+                        .crossRegionReferences(true)
+                        .build(),
+                main.getDistribution(),
+                main.getAlertEmail());
+
         app.synth();
     }
 }

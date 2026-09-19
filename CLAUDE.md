@@ -142,9 +142,19 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   Confirmed against AWS's own CloudFormation example. The stack rolled
   back cleanly (`UPDATE_ROLLBACK_COMPLETE`) with zero impact before the
   fix landed.
-- Redeploying: `cd infra && cdk deploy` — the backend jar rebuilds
+- Redeploying: `cd infra && cdk deploy --all` — the backend jar rebuilds
   automatically first (`cdk.json`'s app command), but **`npm run build` in
   `web/` is still manual** and CDK uploads whatever `web/dist` holds.
+  **`--all` is now required, not optional**: the app has held *two* stacks
+  since 2026-09-19 — `SmallstashStack` (eu-west-1) and
+  `SmallstashCloudFrontAlarmStack` (us-east-1, and it has to be there:
+  CloudFront publishes CloudWatch metrics only to us-east-1, and a
+  CloudWatch alarm cannot reference a metric in another region — CDK's own
+  `Alarm.validateMetricStat` throws `AlarmRegionMismatch`). A bare `cdk
+  deploy` against a multi-stack app errors out asking which one. **us-east-1
+  needs its own `cdk bootstrap` first** (`cdk bootstrap aws://<account>/us-east-1`)
+  — bootstrapping is per-account-*per-region*, and only eu-west-1 has ever
+  been bootstrapped here.
 - PWA client (`web/`): **built and deployed**, see
   [ADR-0002](docs/decisions/0002-pwa-stack.md). Svelte 5 + Vite SPA on
   S3 + CloudFront (OAC-fronted); login (Cognito SRP), signup, vault CRUD,

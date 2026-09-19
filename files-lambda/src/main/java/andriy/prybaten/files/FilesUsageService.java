@@ -56,6 +56,18 @@ public class FilesUsageService {
         return "users/%s/files/".formatted(userSub);
     }
 
+    /**
+     * Builds the S3 key for one of a user's files.
+     *
+     * <p><b>{@code fileId} must already be validated</b> - see
+     * {@link FilesController#requireValidFileId}. It arrives as a URL path
+     * segment, and S3 does <i>not</i> normalise {@code ..} in object keys, so
+     * an unvalidated value concatenated here would be a path-traversal
+     * primitive: a {@code fileId} of {@code ../../<other-sub>/files/<id>}
+     * resolves to another user's object, which would defeat the per-user
+     * prefix isolation this whole scheme rests on. The prefix itself is safe -
+     * {@code userSub} comes from the verified JWT, never from the request.
+     */
     static String fileKey(String userSub, String fileId) {
         return filesPrefix(userSub) + fileId;
     }
