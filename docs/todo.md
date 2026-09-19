@@ -2134,7 +2134,7 @@ Practical consequences:
 
 `SmallstashStack` is `DELETE_COMPLETE` (last deleted 2026-08-24 14:43 UTC;
 several earlier destroy/recreate cycles before that). Verified gone:
-Cognito pool `eu-west-1_fuVsnnUma`, DynamoDB `smallstash-users`, the vault
+Cognito pool `eu-west-1_<pool-id>`, DynamoDB `smallstash-users`, the vault
 bucket, and the `smallstash-backend` Lambda. Deliberate - the stack is
 being torn down between pre-production iterations, which is exactly what
 the DESTROY removal policy is for.
@@ -2274,7 +2274,7 @@ the template:
 The full security review (Phases 0-3) is deployed, smoke-tested against
 the live stack, and its one loose end (the SNS confirmation) is closed.
 
-Live stack outputs (account `060795901917`, region `eu-west-1`) - **updated
+Live stack outputs (account `<aws-account-id>`, region `eu-west-1`) - **updated
 2026-08-24, redeploy after the security review (Phases 0-3, minus reserved
 concurrency - see "Full teardown capability" and the reserved-concurrency
 revert above). This is the first deploy carrying the invite gate, threat
@@ -2283,9 +2283,9 @@ verified live below, not just assumed from the code. `SiteBucketName`
 confirmed via `aws cloudformation describe-stack-resources` (it isn't a
 `CfnOutput`, the others are from `describe-stacks`):**
 ```
-ApiUrl            = https://g0bbiheo9k.execute-api.eu-west-1.amazonaws.com
+ApiUrl            = https://<api-id>.execute-api.eu-west-1.amazonaws.com
 SiteUrl           = https://ds9wv7ctss47x.cloudfront.net
-UserPoolId        = eu-west-1_PWU4xOAuS
+UserPoolId        = eu-west-1_<pool-id>
 UserPoolClientId  = 2hiuf3q0tvrep45rtst0iei3nv
 VaultBucketName   = smallstashstack-vaultbucket95cbf29a-9ydlr8li6uc0
 SiteBucketName    = smallstashstack-sitebucket397a1860-uq9w1b4lylc0
@@ -2295,9 +2295,9 @@ SiteBucketName    = smallstashstack-sitebucket397a1860-uq9w1b4lylc0
 Previous outputs (now stale, kept only as a record - every value below
 stopped resolving once that stack was destroyed 2026-08-24):
 ```
-ApiUrl            = https://ep63h3wj01.execute-api.eu-west-1.amazonaws.com
-SiteUrl           = https://d3gmlgyc7u2r6p.cloudfront.net
-UserPoolId        = eu-west-1_fuVsnnUma
+ApiUrl            = https://<api-id>.execute-api.eu-west-1.amazonaws.com
+SiteUrl           = https://<distribution-id>.cloudfront.net
+UserPoolId        = eu-west-1_<pool-id>
 UserPoolClientId  = 26dt3ssngkenbj8kq66c8eanrn
 VaultBucketName   = smallstashstack-vaultbucket95cbf29a-1qobdurmi9gc
 SiteBucketName    = smallstashstack-sitebucket397a1860-ayivkugarcbb
@@ -2311,9 +2311,9 @@ network problem.
 Previous outputs (now stale, kept only as a record - every value below
 stopped resolving once the stack above was destroyed):
 ```
-ApiUrl            = https://prk5kj0aq8.execute-api.eu-west-1.amazonaws.com
-SiteUrl           = https://d3pzt5m3kmghz7.cloudfront.net
-UserPoolId        = eu-west-1_Ol6ed2DbJ
+ApiUrl            = https://<api-id>.execute-api.eu-west-1.amazonaws.com
+SiteUrl           = https://<distribution-id>.cloudfront.net
+UserPoolId        = eu-west-1_<pool-id>
 UserPoolClientId  = 7g2krg0h01l25ud3eqqkh1sb17
 VaultBucketName   = smallstashstack-vaultbucket95cbf29a-gjcce2ynr0zz
 SiteBucketName    = smallstashstack-sitebucket397a1860-qqtuwnnfao9m

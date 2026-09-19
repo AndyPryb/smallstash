@@ -13,10 +13,16 @@ possibly grow into a small multi-user thing later — not enterprise.**
 Optimize for near-zero idle cost and low operational burden over
 scalability headroom we don't need yet.
 
-**Current status (2026-08-23):** **first deploy is live**, and a **PWA
+> **Decommissioned 2026-09-19.** The deployment described below ran from
+> 2026-08-23 until it was deliberately destroyed; every AWS resource named
+> here is gone, and account/pool/API identifiers have been replaced with
+> placeholders. The design record is kept as written. Everything in the
+> present tense below describes how the system worked while it was live.
+
+**Status while live (2026-08-23):** **first deploy is live**, and a **PWA
 client scaffold now exists** in `web/` (Svelte 5 + Vite, plain SPA — see
 [ADR-0002](decisions/0002-pwa-stack.md)). `SmallstashStack` is deployed to
-account `060795901917`, region `eu-west-1` — Cognito pool, DynamoDB table,
+account `<aws-account-id>`, region `eu-west-1` — Cognito pool, DynamoDB table,
 S3 bucket, Lambda, and HTTP API all exist and are verified working (JWT
 enforcement confirmed against the live API, not just the code). The PWA can
 sign in via Cognito SRP, derive the Master Key (Argon2id via `hash-wasm`,
