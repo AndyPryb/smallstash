@@ -17,7 +17,7 @@
     <maven.compiler.source>21</maven.compiler.source>
     <maven.compiler.target>21</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <cdk.version>2.252.0</cdk.version>
+    <cdk.version>2.253.0</cdk.version>
     <junit.version>5.11.3</junit.version>
   </properties>
 
