@@ -1,12 +1,9 @@
 # smallStash — Architecture (living doc)
 
-This is the current source of truth for architecture decisions. It supersedes
-[smallStash-session-summary.md](smallStash-session-summary.md) where the two
-disagree (notably: storage is now a **hybrid** S3 + DynamoDB, see
-[ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md)). The session summary is
-kept as a historical record of how we got here. `smallStash-plan.md`,
-referenced in the summary as an earlier, more detailed doc, was **not found**
-in this repo — if you have it, merge anything useful from it into this file.
+This is the current source of truth for architecture decisions. Where an
+early design note and this file disagree, this file wins — most notably
+storage, which is a **hybrid** S3 + DynamoDB rather than S3 alone, see
+[ADR-0001](decisions/0001-storage-s3-vs-dynamodb.md).
 
 Project framing, always keep in view: **solo/personal pet project, aimed to
 possibly grow into a small multi-user thing later — not enterprise.**

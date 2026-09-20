@@ -15,7 +15,7 @@ one-line pointer.
    as this line long claimed — S3 names are globally unique, so CDK
    generates one and passes it to the Lambda via `SMALLSTASH_VAULT_BUCKET`.
    See architecture.md §4 and the `vault`/`keys` packages in
-   `src/main/java/andriy/prybaten`.
+   `vault-lambda/src/main/java/andriy/prybaten`.
 
 2. **Cognito login password vs. vault Master Password.**
    **Status: Resolved — two independent secrets**, per architecture.md §5.
