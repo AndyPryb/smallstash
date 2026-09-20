@@ -104,8 +104,6 @@ docs/todo.md             Forward-looking: deferred items, first-deploy
 docs/open-questions.md   Tracks open decisions with recommended defaults.
 docs/learning-notes/     User's personal explainer notes. Gitignored -
                          never stage or commit anything under this path.
-docs/smallStash-session-summary.md   Historical (session 1) - superseded
-                         by architecture.md where they disagree.
 ```
 
 ## Current status (check `git log` / `docs/architecture.md` §9 for the live version)
@@ -137,10 +135,10 @@ docs/smallStash-session-summary.md   Historical (session 1) - superseded
   the offline-boot fix, and the null-bug friendlier message are all live**
   — verified post-deploy, not assumed: `Content-Security-Policy` header is
   the real enforcing one (not `-Report-Only`), Cognito `MfaConfiguration:
-  OFF`, and all 5 registered users (`andystarrrr`, `<user-2>`,
-  `<demo-user>`, `<user-3>`, `<user-4>`) survived the deploy
-  untouched (`CONFIRMED`, in-place update as `cdk diff` predicted — no
-  data loss, no downtime).
+  OFF`, and all 5 registered users survived the deploy untouched
+  (`CONFIRMED`, in-place update as `cdk diff` predicted — no data loss, no
+  downtime). Account names deliberately not recorded here: they belonged to
+  real people, and this repo is public.
 - One deploy attempt failed first and is worth knowing about if it
   recurs: CloudFront rejects `Content-Security-Policy` set via a custom
   header (`customHeadersBehavior`) — that literal name is reserved for

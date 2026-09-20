@@ -2,7 +2,7 @@
 
 **Status:** Accepted and implemented — see docs/architecture.md §9 for what's built.
 **Date:** 2026-08-16
-**Context doc:** [smallStash-session-summary.md](../smallStash-session-summary.md), [architecture.md](../architecture.md)
+**Context doc:** [architecture.md](../architecture.md)
 
 ## Context
 
