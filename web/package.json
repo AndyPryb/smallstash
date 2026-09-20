@@ -18,12 +18,12 @@
     "idb": "^8.0.3"
   },
   "devDependencies": {
-    "@noble/hashes": "^2.3.0",
-    "@playwright/test": "^1.62.1",
+    "@noble/hashes": "^2.4.0",
+    "@playwright/test": "^1.63.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "fake-indexeddb": "^6.2.5",
-    "svelte": "^5.56.10",
-    "vite": "^8.2.2",
+    "svelte": "^5.57.0",
+    "vite": "^8.3.0",
     "vite-plugin-pwa": "^1.3.0"
   }
 }
